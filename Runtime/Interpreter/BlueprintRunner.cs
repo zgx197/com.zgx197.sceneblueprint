@@ -18,10 +18,8 @@ namespace SceneBlueprint.Runtime.Interpreter
     /// <para>
     /// 使用方式（伪代码）：
     /// <code>
-    /// var runner = new BlueprintRunner();
-    /// runner.RegisterSystem(new TransitionSystem());
-    /// runner.RegisterSystem(new FlowSystem());
-    /// runner.RegisterSystem(new SpawnPresetSystem());
+    /// var runner = BlueprintRunnerFactory.CreateDefault();
+    /// runner.GetSystem&lt;CameraShakeSystem&gt;()?.ShakeHandler = myHandler;
     /// runner.Load(blueprintJsonText);
     /// while (!runner.IsCompleted) runner.Tick();
     /// </code>
@@ -84,6 +82,14 @@ namespace SceneBlueprint.Runtime.Interpreter
         public void RegisterSystems(params BlueprintSystemBase[] systems)
         {
             foreach (var sys in systems) RegisterSystem(sys);
+        }
+
+        /// <summary>按类型查找已注册的 System（用于注入 Handler 等可选依赖）</summary>
+        public T? GetSystem<T>() where T : BlueprintSystemBase
+        {
+            foreach (var sys in _systems)
+                if (sys is T match) return match;
+            return null;
         }
 
         // ══════════════════════════════════════════

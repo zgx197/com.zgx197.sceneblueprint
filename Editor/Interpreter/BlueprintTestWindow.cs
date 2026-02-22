@@ -377,25 +377,11 @@ namespace SceneBlueprint.Editor.Interpreter
             _inspectTick = -1;
             _debugCtrl   = new BlueprintDebugController(600);
 
-            var runner = new BlueprintRunner
-            {
-                Log = msg => UnityEngine.Debug.Log(msg),
-                LogWarning = msg => UnityEngine.Debug.LogWarning(msg),
-                LogError = msg => UnityEngine.Debug.LogError(msg),
-                DebugController = _debugCtrl
-            };
-
-            // 注册所有基础 System
-            runner.RegisterSystems(
-                new TransitionSystem(),
-                new FlowSystem(),
-                new FlowFilterSystem(),
-                new SpawnPresetSystem(),
-                new SpawnWaveSystem(),
-                new TriggerEnterAreaSystem(),
-                new CameraShakeSystem(),
-                new ShowWarningSystem()
-            );
+            var runner = BlueprintRunnerFactory.CreateDefault();
+            runner.Log = msg => UnityEngine.Debug.Log(msg);
+            runner.LogWarning = msg => UnityEngine.Debug.LogWarning(msg);
+            runner.LogError = msg => UnityEngine.Debug.LogError(msg);
+            runner.DebugController = _debugCtrl;
 
             return runner;
         }
