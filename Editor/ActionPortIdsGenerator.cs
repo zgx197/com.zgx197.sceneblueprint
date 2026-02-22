@@ -58,7 +58,7 @@ namespace SceneBlueprint.Editor
             sb.AppendLine("    /// </code>");
             sb.AppendLine("    /// </para>");
             sb.AppendLine("    /// </summary>");
-            sb.AppendLine("    public static class ActionPortIds");
+            sb.AppendLine("    public static partial class ActionPortIds");
             sb.AppendLine("    {");
 
             foreach (var def in definitions.OrderBy(d => d.TypeId))

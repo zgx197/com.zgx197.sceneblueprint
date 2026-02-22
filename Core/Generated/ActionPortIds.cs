@@ -25,7 +25,7 @@ namespace SceneBlueprint.Core.Generated
     /// </code>
     /// </para>
     /// </summary>
-    public static class ActionPortIds
+    public static partial class ActionPortIds
     {
         /// <summary>读取变量 (Blackboard.Get)</summary>
         public static class BlackboardGet
@@ -115,25 +115,19 @@ namespace SceneBlueprint.Core.Generated
         /// <summary>放置预设怪 (Spawn.Preset)</summary>
         public static class SpawnPreset
         {
-            // 端口 ID
             public const string In  = "in";
             public const string Out = "out";
-
-            // 属性 Key（类型化）
             public static readonly PropertyKey<string> SpawnArea = new("spawnArea");
         }
 
         /// <summary>波次刷怪 (Spawn.Wave)</summary>
         public static class SpawnWave
         {
-            // 端口 ID
             public const string In          = "in";
             public const string Out         = "out";
             public const string OnWaveStart = "onWaveStart";
             public const string WaveIndex   = "waveIndex";
             public const string TotalWaves  = "totalWaves";
-
-            // 属性 Key（类型化）
             public static readonly PropertyKey<string> SpawnArea = new("spawnArea");
             public static readonly PropertyKey<string> Waves     = new("waves");
         }
@@ -141,11 +135,8 @@ namespace SceneBlueprint.Core.Generated
         /// <summary>进入区域 (Trigger.EnterArea)</summary>
         public static class TriggerEnterArea
         {
-            // 端口 ID
             public const string In  = "in";
             public const string Out = "out";
-
-            // 属性 Key（类型化）
             public static readonly PropertyKey<string> TriggerArea        = new("triggerArea");
             public static readonly PropertyKey<bool>   RequireFullyInside = new("requireFullyInside");
         }
@@ -153,11 +144,8 @@ namespace SceneBlueprint.Core.Generated
         /// <summary>摄像机震动 (VFX.CameraShake)</summary>
         public static class VFXCameraShake
         {
-            // 端口 ID
             public const string In  = "in";
             public const string Out = "out";
-
-            // 属性 Key（类型化）
             public static readonly PropertyKey<float> Intensity = new("intensity");
             public static readonly PropertyKey<float> Duration  = new("duration");
             public static readonly PropertyKey<float> Frequency = new("frequency");
@@ -166,11 +154,8 @@ namespace SceneBlueprint.Core.Generated
         /// <summary>屏幕闪光 (VFX.ScreenFlash)</summary>
         public static class VFXScreenFlash
         {
-            // 端口 ID
             public const string In  = "in";
             public const string Out = "out";
-
-            // 属性 Key（类型化）
             public static readonly PropertyKey<string> FlashColor = new("flashColor");
             public static readonly PropertyKey<float>  Duration   = new("duration");
             public static readonly PropertyKey<float>  Intensity  = new("intensity");
@@ -179,15 +164,15 @@ namespace SceneBlueprint.Core.Generated
         /// <summary>屏幕警告 (VFX.ShowWarning)</summary>
         public static class VFXShowWarning
         {
-            // 端口 ID
             public const string In  = "in";
             public const string Out = "out";
-
-            // 属性 Key（类型化）
             public static readonly PropertyKey<string> Text     = new("text");
             public static readonly PropertyKey<float>  Duration = new("duration");
             public static readonly PropertyKey<string> Style    = new("style");
             public static readonly PropertyKey<int>    FontSize = new("fontSize");
         }
+
+        // v0.2 计划：以上游戏特定条目将迁移到 .sbdef 定义，
+        // 届时支持带类型注解的 port 声明，生成 PropertyKey<T>。
     }
 }

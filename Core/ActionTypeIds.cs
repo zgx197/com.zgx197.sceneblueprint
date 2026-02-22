@@ -7,7 +7,7 @@ namespace SceneBlueprint.Core
     /// <para>
     /// System 层通过 <c>AT.xxx</c> 引用节点类型，避免魔法字符串：
     /// <code>
-    /// var indices = frame.GetActionIndices(AT.Spawn.Wave);
+    /// var indices = frame.GetActionIndices(AT.Flow.Start);
     /// </code>
     /// </para>
     /// </summary>
@@ -23,28 +23,13 @@ namespace SceneBlueprint.Core
             public const string Delay  = "Flow.Delay";
         }
 
-        public static class Spawn
-        {
-            public const string Wave   = "Spawn.Wave";
-            public const string Preset = "Spawn.Preset";
-        }
-
-        public static class Trigger
-        {
-            public const string EnterArea = "Trigger.EnterArea";
-        }
-
         public static class Blackboard
         {
             public const string Get = "Blackboard.Get";
             public const string Set = "Blackboard.Set";
         }
 
-        public static class Vfx
-        {
-            public const string CameraShake = "VFX.CameraShake";
-            public const string ScreenFlash = "VFX.ScreenFlash";
-            public const string ShowWarning = "VFX.ShowWarning";
-        }
+        // Spawn.*、Trigger.*、Vfx.* 已迁移至 SceneBlueprintUser/Definitions/*.sbdef，
+        // 由 SbdefCodeGen 自动生成到 SceneBlueprintUser/Generated/UAT.*.g.cs。
     }
 }
