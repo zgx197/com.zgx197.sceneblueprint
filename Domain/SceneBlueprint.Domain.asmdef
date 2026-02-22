@@ -1,0 +1,16 @@
+{
+    "name": "SceneBlueprint.Domain",
+    "rootNamespace": "SceneBlueprint.Domain",
+    "references": [
+        "SceneBlueprint.Core"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": true
+}

@@ -1,0 +1,24 @@
+{
+  "name": "com.zgx197.sceneblueprint",
+  "version": "0.1.0",
+  "displayName": "SceneBlueprint",
+  "description": "A scene-level blueprint authoring framework for Unity. Provides a visual node-graph editor for designing scene behaviors, supporting actions, markers, blackboard, and runtime interpretation.",
+  "unity": "2021.3",
+  "documentationUrl": "https://github.com/zgx197/com.zgx197.sceneblueprint#readme",
+  "changelogUrl": "https://github.com/zgx197/com.zgx197.sceneblueprint/blob/main/CHANGELOG.md",
+  "licensesUrl": "https://github.com/zgx197/com.zgx197.sceneblueprint/blob/main/LICENSE",
+  "dependencies": {
+    "com.zgx197.nodegraph": "0.1.0"
+  },
+  "keywords": [
+    "scene-blueprint",
+    "node-graph",
+    "editor-tool",
+    "blueprint",
+    "action-system"
+  ],
+  "author": {
+    "name": "ZhangGuoxin",
+    "url": "https://github.com/zgx197"
+  }
+}

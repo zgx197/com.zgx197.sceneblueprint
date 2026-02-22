@@ -1,0 +1,31 @@
+{
+    "name": "SceneBlueprint.Editor",
+    "rootNamespace": "SceneBlueprint.Editor",
+    "references": [
+        "SceneBlueprint.Core",
+        "SceneBlueprint.Contract",
+        "SceneBlueprint.Runtime",
+        "SceneBlueprint.SpatialAbstraction",
+        "SceneBlueprint.Adapters.Unity3D",
+        "SceneBlueprint.Adapters.Unity2D",
+        "com.zgx197.nodegraph.math",
+        "com.zgx197.nodegraph.core",
+        "com.zgx197.nodegraph.commands",
+        "com.zgx197.nodegraph.abstraction",
+        "com.zgx197.nodegraph.view",
+        "com.zgx197.nodegraph.layout",
+        "com.zgx197.nodegraph.serialization",
+        "com.zgx197.nodegraph.editor"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

@@ -1,0 +1,17 @@
+{
+    "name": "SceneBlueprint.Runtime",
+    "rootNamespace": "SceneBlueprint.Runtime",
+    "references": [
+        "SceneBlueprint.Contract",
+        "SceneBlueprint.Core"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
