@@ -1,0 +1,91 @@
+{
+    "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+    "name": "SceneBlueprint DSL",
+    "scopeName": "source.sbdef",
+    "patterns": [
+        { "include": "#comment" },
+        { "include": "#action-block" },
+        { "include": "#marker-block" }
+    ],
+    "repository": {
+        "comment": {
+            "match": "//.*$",
+            "name": "comment.line.double-slash.sbdef"
+        },
+        "string": {
+            "begin": "\"",
+            "end": "\"",
+            "name": "string.quoted.double.sbdef",
+            "patterns": [
+                { "match": "\\\\.", "name": "constant.character.escape.sbdef" }
+            ]
+        },
+        "number": {
+            "match": "-?\\b\\d+(\\.\\d+)?\\b",
+            "name": "constant.numeric.sbdef"
+        },
+        "boolean": {
+            "match": "\\b(true|false)\\b",
+            "name": "constant.language.boolean.sbdef"
+        },
+        "type-id": {
+            "match": "\\b[A-Z][A-Za-z0-9]*(\\.[A-Z][A-Za-z0-9]*)+\\b",
+            "name": "entity.name.type.sbdef"
+        },
+        "port-type": {
+            "match": "\\b(float|int|bool|string)\\b",
+            "name": "storage.type.sbdef"
+        },
+        "duration-value": {
+            "match": "\\b(instant|duration|passive)\\b",
+            "name": "constant.language.sbdef"
+        },
+        "action-block": {
+            "begin": "\\b(action)\\b",
+            "end": "(?<=\\})",
+            "beginCaptures": {
+                "1": { "name": "keyword.control.action.sbdef" }
+            },
+            "patterns": [
+                { "include": "#comment" },
+                { "include": "#string" },
+                { "include": "#number" },
+                { "include": "#type-id" },
+                { "include": "#port-type" },
+                { "include": "#duration-value" },
+                { "include": "#meta-keywords" },
+                { "include": "#port-statement" },
+                { "include": "#flow-statement" }
+            ]
+        },
+        "marker-block": {
+            "begin": "\\b(marker)\\b",
+            "end": "(?<=\\})",
+            "beginCaptures": {
+                "1": { "name": "keyword.control.marker.sbdef" }
+            },
+            "patterns": [
+                { "include": "#comment" },
+                { "include": "#string" },
+                { "include": "#number" },
+                { "include": "#marker-keywords" }
+            ]
+        },
+        "meta-keywords": {
+            "match": "\\b(displayName|category|description|themeColor|duration)\\b",
+            "name": "keyword.other.meta.sbdef"
+        },
+        "port-statement": {
+            "match": "\\b(port)\\b",
+            "name": "keyword.other.port.sbdef"
+        },
+        "flow-statement": {
+            "match": "\\b(flow)\\b",
+            "name": "keyword.other.flow.sbdef"
+        },
+        "marker-keywords": {
+            "match": "\\b(label|gizmo)\\b",
+            "name": "keyword.other.marker.sbdef"
+        }
+    }
+}

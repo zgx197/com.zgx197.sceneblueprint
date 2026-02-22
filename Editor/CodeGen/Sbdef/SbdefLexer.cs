@@ -7,7 +7,7 @@ namespace SceneBlueprint.Editor.CodeGen.Sbdef
 {
     internal enum TokenKind
     {
-        Action, Port, Marker, Label, Gizmo,
+        Action, Port, Flow, Marker, Label, Gizmo, Min, Max,
         Identifier,
         StringLiteral,
         NumberLiteral,
@@ -97,9 +97,12 @@ namespace SceneBlueprint.Editor.CodeGen.Sbdef
                     {
                         "action" => TokenKind.Action,
                         "port"   => TokenKind.Port,
+                        "flow"   => TokenKind.Flow,
                         "marker" => TokenKind.Marker,
                         "label"  => TokenKind.Label,
                         "gizmo"  => TokenKind.Gizmo,
+                        "min"    => TokenKind.Min,
+                        "max"    => TokenKind.Max,
                         "true"   => TokenKind.BoolLiteral,
                         "false"  => TokenKind.BoolLiteral,
                         _        => TokenKind.Identifier,

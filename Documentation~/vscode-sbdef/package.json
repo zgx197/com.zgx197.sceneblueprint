@@ -1,0 +1,26 @@
+{
+    "name": "vscode-sbdef",
+    "displayName": "SceneBlueprint DSL (.sbdef)",
+    "description": "Syntax highlighting for .sbdef files (SceneBlueprint Action/Marker DSL)",
+    "version": "0.1.0",
+    "publisher": "zgx197",
+    "engines": { "vscode": "^1.75.0" },
+    "categories": ["Programming Languages"],
+    "contributes": {
+        "languages": [
+            {
+                "id": "sbdef",
+                "aliases": ["SceneBlueprint DSL", "sbdef"],
+                "extensions": [".sbdef"],
+                "configuration": "./language-configuration.json"
+            }
+        ],
+        "grammars": [
+            {
+                "language": "sbdef",
+                "scopeName": "source.sbdef",
+                "path": "./syntaxes/sbdef.tmLanguage.json"
+            }
+        ]
+    }
+}

@@ -48,7 +48,7 @@ namespace SceneBlueprint.Editor.CodeGen.Sbdef
                 }
                 catch (Exception e)
                 {
-                    UnityEngine.Debug.LogError($"[SbdefCodeGen] 处理 {assetPath} 时出错：{e.Message}");
+                    SbdefDiagnostic.LogException(assetPath, e);
                 }
             }
 
@@ -87,12 +87,37 @@ namespace SceneBlueprint.Editor.CodeGen.Sbdef
 
             var tokens  = SbdefLexer.Tokenize(source);
             var ast     = SbdefParser.Parse(tokens);
+
+            // v0.1: UAT.*.g.cs（类型 ID 常量）
             var outputs = SbdefActionEmitter.Emit(ast, name);
+
+            // v0.2: UActionPortIds.*.g.cs + ActionDefs.*.g.cs
+            foreach (var kv in SbdefDefEmitter.Emit(ast, name))
+                outputs[kv.Key] = kv.Value;
+
+            // v0.3: UMarkerTypeIds.g.cs + UMarkers.g.cs + Editor/UMarkerDefs.g.cs
+            foreach (var kv in SbdefMarkerEmitter.Emit(ast, name))
+                outputs[kv.Key] = kv.Value;
+
+            // 确保 Editor 子目录存在
+            var editorAbsDir = Path.Combine(outputAbsDir, "Editor");
 
             int written = 0;
             foreach (var (fileName, content) in outputs)
             {
-                var dest = Path.Combine(outputAbsDir, fileName);
+                // 键以 "Editor/" 开头的文件输出到 Generated/Editor/ 子目录
+                string dest;
+                if (fileName.StartsWith("Editor/", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (!Directory.Exists(editorAbsDir))
+                        Directory.CreateDirectory(editorAbsDir);
+                    dest = Path.Combine(editorAbsDir, fileName.Substring("Editor/".Length));
+                }
+                else
+                {
+                    dest = Path.Combine(outputAbsDir, fileName);
+                }
+
                 // 仅在内容变化时写入，避免触发不必要的重编译
                 if (File.Exists(dest) && File.ReadAllText(dest, Encoding.UTF8) == content)
                     continue;

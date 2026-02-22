@@ -43,11 +43,79 @@ namespace SceneBlueprint.Editor.CodeGen.Sbdef
                 Consume(TokenKind.Action);
                 var typeId = Consume(TokenKind.Identifier).Value;
                 Consume(TokenKind.LBrace);
+
+                string? displayName = null, category = null, description = null,
+                        themeColor = null, duration = null;
                 var ports = new List<PortDecl>();
+                var flowPorts = new List<FlowPortDecl>();
+
                 while (Peek().Kind != TokenKind.RBrace && Peek().Kind != TokenKind.EOF)
-                    ports.Add(ParsePort());
+                {
+                    if (Peek().Kind == TokenKind.Port)
+                    {
+                        ports.Add(ParsePort());
+                    }
+                    else if (Peek().Kind == TokenKind.Flow)
+                    {
+                        flowPorts.Add(ParseFlowPort());
+                    }
+                    else if (Peek().Kind == TokenKind.Identifier)
+                    {
+                        // action 元数据关键字（识别 Identifier 的 Value 来区分）
+                        var keyword = Peek().Value;
+                        switch (keyword)
+                        {
+                            case "displayName":
+                                ConsumeAny();
+                                displayName = Consume(TokenKind.StringLiteral).Value;
+                                break;
+                            case "category":
+                                ConsumeAny();
+                                category = Consume(TokenKind.StringLiteral).Value;
+                                break;
+                            case "description":
+                                ConsumeAny();
+                                description = Consume(TokenKind.StringLiteral).Value;
+                                break;
+                            case "themeColor":
+                                ConsumeAny();
+                                var r = ConsumeAny().Value;
+                                var g = ConsumeAny().Value;
+                                var b = ConsumeAny().Value;
+                                themeColor = $"{r} {g} {b}";
+                                break;
+                            case "duration":
+                                ConsumeAny();
+                                duration = ConsumeAny().Value; // "instant" | "duration" | "passive"
+                                break;
+                            default:
+                                throw new Exception(
+                                    $"[SbdefParser] 未知 action 元数据关键字 '{keyword}'（行 {Peek().Line}）");
+                        }
+                    }
+                    else
+                    {
+                        throw new Exception(
+                            $"[SbdefParser] action 块内期望 'port' 或元数据关键字，得到 '{Peek().Value}'（行 {Peek().Line}）");
+                    }
+                }
+
                 Consume(TokenKind.RBrace);
-                return new ActionDecl(typeId, ports);
+                var meta = new ActionMeta(displayName, category, description, themeColor, duration);
+                return new ActionDecl(typeId, meta, ports, flowPorts);
+            }
+
+            FlowPortDecl ParseFlowPort()
+            {
+                Consume(TokenKind.Flow);
+                var portName = Consume(TokenKind.Identifier).Value;
+                string? label = null;
+                if (Peek().Kind == TokenKind.Label)
+                {
+                    ConsumeAny();
+                    label = Consume(TokenKind.StringLiteral).Value;
+                }
+                return new FlowPortDecl(portName, label);
             }
 
             PortDecl ParsePort()
@@ -61,7 +129,29 @@ namespace SceneBlueprint.Editor.CodeGen.Sbdef
                     ConsumeAny(); // =
                     defaultVal = ConsumeAny().Value;
                 }
-                return new PortDecl(typeName, portName, defaultVal);
+                // 可选的 label / min / max（任意顺序）
+                string? label = null, min = null, max = null;
+                while (Peek().Kind == TokenKind.Label ||
+                       Peek().Kind == TokenKind.Min   ||
+                       Peek().Kind == TokenKind.Max)
+                {
+                    switch (Peek().Kind)
+                    {
+                        case TokenKind.Label:
+                            ConsumeAny();
+                            label = Consume(TokenKind.StringLiteral).Value;
+                            break;
+                        case TokenKind.Min:
+                            ConsumeAny();
+                            min = ConsumeAny().Value;
+                            break;
+                        case TokenKind.Max:
+                            ConsumeAny();
+                            max = ConsumeAny().Value;
+                            break;
+                    }
+                }
+                return new PortDecl(typeName, portName, defaultVal, label, min, max);
             }
 
             MarkerDecl ParseMarker()
@@ -69,15 +159,37 @@ namespace SceneBlueprint.Editor.CodeGen.Sbdef
                 Consume(TokenKind.Marker);
                 var name = Consume(TokenKind.Identifier).Value;
                 Consume(TokenKind.LBrace);
-                // v0.1: 跳过 marker 块内容，不生成代码
-                int depth = 1;
-                while (depth > 0 && Peek().Kind != TokenKind.EOF)
+
+                string? label = null, gizmoShape = null, gizmoParam = null;
+
+                while (Peek().Kind != TokenKind.RBrace && Peek().Kind != TokenKind.EOF)
                 {
-                    var t = ConsumeAny();
-                    if (t.Kind == TokenKind.LBrace) depth++;
-                    else if (t.Kind == TokenKind.RBrace) depth--;
+                    if (Peek().Kind == TokenKind.Label)
+                    {
+                        ConsumeAny();
+                        label = Consume(TokenKind.StringLiteral).Value;
+                    }
+                    else if (Peek().Kind == TokenKind.Gizmo)
+                    {
+                        ConsumeAny();
+                        gizmoShape = Consume(TokenKind.Identifier).Value; // sphere / wire_sphere / box / wire_box
+                        // 可选参数：sphere(0.3)
+                        if (Peek().Kind == TokenKind.LParen)
+                        {
+                            ConsumeAny(); // (
+                            gizmoParam = ConsumeAny().Value;
+                            Consume(TokenKind.RParen);
+                        }
+                    }
+                    else
+                    {
+                        // 跳过未知内容，兼容未来扩展
+                        ConsumeAny();
+                    }
                 }
-                return new MarkerDecl(name);
+
+                Consume(TokenKind.RBrace);
+                return new MarkerDecl(name, label, gizmoShape, gizmoParam);
             }
         }
     }
