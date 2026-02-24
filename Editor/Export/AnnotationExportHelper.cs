@@ -198,23 +198,90 @@ namespace SceneBlueprint.Editor.Export
         {
             return value switch
             {
-                int => "Int",
-                float => "Float",
-                bool => "Bool",
+                int    => "Int",
+                float  => "Float",
+                bool   => "Bool",
                 string => "String",
+                System.Collections.IList => "Json",
+                System.Collections.IDictionary => "Json",
                 _ => "String"
             };
         }
 
         private static string SerializeValue(object value)
         {
-            return value switch
+            if (value is float f)  return f.ToString(CultureInfo.InvariantCulture);
+            if (value is int   i)  return i.ToString(CultureInfo.InvariantCulture);
+            if (value is bool  b)  return b ? "true" : "false";
+            if (value is string s) return s;
+
+            // 列表类型 → JSON 数组
+            if (value is System.Collections.IList list)
+                return SerializeList(list);
+
+            // 字典类型 → JSON 对象
+            if (value is System.Collections.IDictionary dict)
+                return SerializeDict(dict);
+
+            return value?.ToString() ?? "";
+        }
+
+        private static string SerializeList(System.Collections.IList list)
+        {
+            var sb = new System.Text.StringBuilder();
+            sb.Append('[');
+            bool first = true;
+            foreach (var item in list)
             {
-                float f => f.ToString(CultureInfo.InvariantCulture),
-                int i => i.ToString(CultureInfo.InvariantCulture),
-                bool b => b ? "true" : "false",
-                _ => value?.ToString() ?? ""
-            };
+                if (!first) sb.Append(',');
+                first = false;
+                if (item is System.Collections.IDictionary d)
+                    sb.Append(SerializeDict(d));
+                else
+                    sb.Append(SerializePrimitive(item));
+            }
+            sb.Append(']');
+            return sb.ToString();
+        }
+
+        private static string SerializeDict(System.Collections.IDictionary dict)
+        {
+            var sb = new System.Text.StringBuilder();
+            sb.Append('{');
+            bool first = true;
+            foreach (System.Collections.DictionaryEntry kv in dict)
+            {
+                if (!first) sb.Append(',');
+                first = false;
+                sb.Append('"');
+                sb.Append(kv.Key?.ToString() ?? "");
+                sb.Append('"');
+                sb.Append(':');
+                var v = kv.Value;
+                if (v is System.Collections.IDictionary nestedDict)
+                    sb.Append(SerializeDict(nestedDict));
+                else if (v is System.Collections.IList nestedList)
+                    sb.Append(SerializeList(nestedList));
+                else
+                    sb.Append(SerializePrimitive(v));
+            }
+            sb.Append('}');
+            return sb.ToString();
+        }
+
+        private static string SerializePrimitive(object? v)
+        {
+            if (v == null)  return "null";
+            if (v is float  fv) return fv.ToString(CultureInfo.InvariantCulture);
+            if (v is double dv) return dv.ToString(CultureInfo.InvariantCulture);
+            if (v is int    iv) return iv.ToString(CultureInfo.InvariantCulture);
+            if (v is bool   bv) return bv ? "true" : "false";
+            if (v is string sv)
+            {
+                // JSON 字符串转义
+                return '"' + sv.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\n", "\\n") + '"';
+            }
+            return '"' + (v.ToString() ?? "") + '"';
         }
     }
 }

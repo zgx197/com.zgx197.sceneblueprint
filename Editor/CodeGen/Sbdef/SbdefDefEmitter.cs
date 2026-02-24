@@ -10,8 +10,8 @@ namespace SceneBlueprint.Editor.CodeGen.Sbdef
     /// <summary>
     /// v0.2 Emitter：从 SbdefFile 生成两份 C# 代码。
     /// <list type="bullet">
-    /// <item>UActionPortIds.{Segment}.g.cs — PropertyKey&lt;T&gt; 类型化端口键</item>
-    /// <item>ActionDefs.{Segment}.g.cs     — IActionDefinitionProvider 完整实现</item>
+    /// <item>UActionPortIds.{Segment}.cs — PropertyKey&lt;T&gt; 类型化端口键</item>
+    /// <item>ActionDefs.{Segment}.cs     — IActionDefinitionProvider 完整实现</item>
     /// </list>
     /// </summary>
     internal static class SbdefDefEmitter
@@ -33,8 +33,8 @@ namespace SceneBlueprint.Editor.CodeGen.Sbdef
                 var pascal = SbdefActionEmitter.ToPascalSegment(ns);
                 var list   = grp.ToList();
 
-                result[$"UActionPortIds.{pascal}.g.cs"] = EmitPortIds(list, pascal, sourceName);
-                result[$"ActionDefs.{pascal}.g.cs"]     = EmitActionDefs(list, pascal, sourceName);
+                result[$"UActionPortIds.{pascal}.cs"] = EmitPortIds(list, pascal, sourceName);
+                result[$"ActionDefs.{pascal}.cs"]     = EmitActionDefs(list, pascal, sourceName);
             }
             return result;
         }
@@ -70,6 +70,15 @@ namespace SceneBlueprint.Editor.CodeGen.Sbdef
                     var keyString  = ToCamelCase(port.PortName);             // camelCase
                     var csharpType = PortTypeToCSharp(port.TypeName);        // "float"
                     sb.AppendLine($"            public static readonly PropertyKey<{csharpType}> {fieldName} = new(\"{keyString}\");");
+                }
+
+                // 数据端口的 PortId 常量（outport / inport → const string）
+                foreach (var port in action.Ports)
+                {
+                    if (port.DataDirection == null) continue;
+                    // 在上面的循环里已经生成了 PropertyKey，这里额外生成 PortId 常量
+                    // 实际上 PropertyKey 本身可以隐式转 string，无需重复生成
+                    // 留空：PropertyKey<T> 已经足够
                 }
 
                 foreach (var fp in action.FlowPorts)
@@ -147,15 +156,28 @@ namespace SceneBlueprint.Editor.CodeGen.Sbdef
                     var portLabel = fp.Label ?? fp.PortName;
                     sb.AppendLine($"                Port.Out(UActionPortIds.{className}.{fp.PortName}, \"{EscapeString(portLabel)}\"),");
                 }
+                // 数据端口（outport / inport）
+                foreach (var port in action.Ports)
+                {
+                    if (port.DataDirection == null) continue;
+                    var pLabel   = port.Label ?? port.PortName;
+                    var pKeyRef  = $"UActionPortIds.{className}.{port.PortName}";
+                    var pDataType = port.TypeName; // "int", "float", "string", "bool"
+                    if (port.DataDirection == "out")
+                        sb.AppendLine($"                Port.DataOut({pKeyRef}, \"{EscapeString(pLabel)}\", \"{pDataType}\"),");
+                    else
+                        sb.AppendLine($"                Port.DataIn({pKeyRef}, \"{EscapeString(pLabel)}\", \"{pDataType}\"),");
+                }
                 sb.AppendLine("            },");
 
-                // Properties
-                if (action.Ports.Count > 0)
+                // Properties（跳过数据端口 outport/inport）
+                var propPorts = action.Ports.Where(p => p.DataDirection == null).ToList();
+                if (propPorts.Count > 0)
                 {
                     sb.AppendLine("            Properties = new[]");
                     sb.AppendLine("            {");
                     int order = 0;
-                    foreach (var port in action.Ports)
+                    foreach (var port in propPorts)
                     {
                         var propLine = BuildPropLine(className, port, order++);
                         sb.AppendLine($"                {propLine}");
@@ -167,7 +189,24 @@ namespace SceneBlueprint.Editor.CodeGen.Sbdef
                     sb.AppendLine("            Properties = System.Array.Empty<PropertyDefinition>(),");
                 }
 
-                sb.AppendLine("            SceneRequirements = System.Array.Empty<MarkerRequirement>()");
+                // SceneRequirements
+                if (action.Requirements != null && action.Requirements.Count > 0)
+                {
+                    sb.AppendLine("            SceneRequirements = new MarkerRequirement[]");
+                    sb.AppendLine("            {");
+                    foreach (var req in action.Requirements)
+                    {
+                        var bindingKey = ToCamelCase(req.PortName);
+                        var reqLabel   = req.Label ?? req.PortName;
+                        var reqVal     = req.IsRequired ? "true" : "false";
+                        sb.AppendLine($"                new MarkerRequirement(\"{bindingKey}\", \"{req.MarkerType}\", required: {reqVal}, displayName: \"{EscapeString(reqLabel)}\"),");
+                    }
+                    sb.AppendLine("            }");
+                }
+                else
+                {
+                    sb.AppendLine("            SceneRequirements = System.Array.Empty<MarkerRequirement>()");
+                }
                 sb.AppendLine("        };");
                 sb.AppendLine("    }");
                 sb.AppendLine();
@@ -181,10 +220,37 @@ namespace SceneBlueprint.Editor.CodeGen.Sbdef
 
         private static string BuildPropLine(string className, PortDecl port, int order)
         {
-            var keyRef     = $"UActionPortIds.{className}.{port.PortName}"; // 利用隐式转 string
-            var label      = port.Label ?? port.PortName;
-            var labelLit   = $"\"{EscapeString(label)}\"";
-            var typeName   = port.TypeName.ToLower();
+            var keyRef   = $"UActionPortIds.{className}.{port.PortName}";
+            var label    = port.Label ?? port.PortName;
+            var labelLit = $"\"{EscapeString(label)}\"";
+            var typeName = port.TypeName.ToLower();
+
+            // sceneref(Area/Point) → Prop.SceneBinding
+            if (typeName == "sceneref")
+            {
+                var bindingType = port.SceneRefType ?? "Transform";
+                return $"Prop.SceneBinding({keyRef}, {labelLit}, BindingType.{bindingType}, order: {order}),";
+            }
+
+            // list → Prop.StructList
+            if (typeName == "list")
+            {
+                var summary = port.Summary != null ? $"\"{EscapeString(port.Summary)}\"" : "null";
+                if (port.NestedPortFields != null && port.NestedPortFields.Count > 0)
+                {
+                    var fieldLines = new System.Text.StringBuilder();
+                    foreach (var f in port.NestedPortFields)
+                    {
+                        var fLabel = f.Label ?? f.Name;
+                        var fKey   = ToCamelCase(f.Name);
+                        fieldLines.Append(BuildNestedFieldProp(fKey, fLabel, f.TypeName));
+                        fieldLines.Append(", ");
+                    }
+                    return $"Prop.StructList({keyRef}, {labelLit}, new PropertyDefinition[] {{ {fieldLines}}}, summaryFormat: {summary}, order: {order}),";
+                }
+                return $"Prop.StructList({keyRef}, {labelLit}, System.Array.Empty<PropertyDefinition>(), summaryFormat: {summary}, order: {order}),";
+            }
+
             var defaultVal = port.DefaultValue;
             var min        = port.Min;
             var max        = port.Max;
@@ -193,7 +259,7 @@ namespace SceneBlueprint.Editor.CodeGen.Sbdef
             {
                 case "float":
                 {
-                    var def = FormatFloat(defaultVal ?? "0");
+                    var def  = FormatFloat(defaultVal ?? "0");
                     var args = $"{keyRef}, {labelLit}, defaultValue: {def}";
                     if (min != null) args += $", min: {FormatFloat(min)}";
                     if (max != null) args += $", max: {FormatFloat(max)}";
@@ -202,7 +268,7 @@ namespace SceneBlueprint.Editor.CodeGen.Sbdef
                 }
                 case "int":
                 {
-                    var def = FormatInt(defaultVal ?? "0");
+                    var def  = FormatInt(defaultVal ?? "0");
                     var args = $"{keyRef}, {labelLit}, defaultValue: {def}";
                     if (min != null) args += $", min: {FormatInt(min)}";
                     if (max != null) args += $", max: {FormatInt(max)}";
@@ -220,6 +286,19 @@ namespace SceneBlueprint.Editor.CodeGen.Sbdef
                     return $"Prop.String({keyRef}, {labelLit}, defaultValue: {def}, order: {order}),";
                 }
             }
+        }
+
+        /// <summary>为 StructList 嵌套字段生成 Prop.* 调用片段（不含尾部逗号）</summary>
+        private static string BuildNestedFieldProp(string camelKey, string label, string typeName)
+        {
+            var labelLit = $"\"{EscapeString(label)}\"";
+            return typeName.ToLower() switch
+            {
+                "float"  => $"Prop.Float(\"{camelKey}\", {labelLit})",
+                "int"    => $"Prop.Int(\"{camelKey}\", {labelLit})",
+                "bool"   => $"Prop.Bool(\"{camelKey}\", {labelLit})",
+                _        => $"Prop.String(\"{camelKey}\", {labelLit})",
+            };
         }
 
         // ── 名称转换工具 ─────────────────────────────────────────
@@ -265,11 +344,13 @@ namespace SceneBlueprint.Editor.CodeGen.Sbdef
         {
             return dslType.ToLower() switch
             {
-                "float"  => "float",
-                "int"    => "int",
-                "bool"   => "bool",
-                "string" => "string",
-                _        => "string", // 未知类型回退为 string
+                "float"    => "float",
+                "int"      => "int",
+                "bool"     => "bool",
+                "string"   => "string",
+                "sceneref" => "string", // 场景绑定存储为 marker ID 字符串
+                "list"     => "string", // StructList 存储为 JSON 字符串
+                _          => "string",
             };
         }
 

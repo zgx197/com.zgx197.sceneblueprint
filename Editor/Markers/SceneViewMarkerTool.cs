@@ -179,9 +179,9 @@ namespace SceneBlueprint.Editor.Markers
 
             var menu = new GenericMenu();
 
-            // 基础标记类型
             var markerDefinitions = MarkerDefinitionRegistry.GetAll()
-                .OrderBy(d => d.DisplayName)
+                .OrderBy(d => d.Group ?? "")
+                .ThenBy(d => d.DisplayName)
                 .ThenBy(d => d.TypeId)
                 .ToList();
 
@@ -190,9 +190,14 @@ namespace SceneBlueprint.Editor.Markers
                 string displayName = string.IsNullOrEmpty(definition.DisplayName)
                     ? definition.TypeId
                     : definition.DisplayName;
-                string label = $"空白 {displayName}";
+
+                // 有 Group 的放子菜单，无 Group 的放顶层
+                string menuPath = string.IsNullOrEmpty(definition.Group)
+                    ? $"空白 {displayName}"
+                    : $"{definition.Group}/空白 {displayName}";
+
                 var definitionCopy = definition;
-                menu.AddItem(new GUIContent(label), false, () =>
+                menu.AddItem(new GUIContent(menuPath), false, () =>
                 {
                     CreateStandaloneMarkerFromDefinition(definitionCopy, worldPos);
                 });

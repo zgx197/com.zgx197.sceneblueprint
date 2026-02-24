@@ -1,0 +1,336 @@
+#nullable enable
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+
+namespace SceneBlueprint.Editor.CodeGen.Sbdef
+{
+    /// <summary>
+    /// .sbdef Annotation 代码生成器 — 从 annotation 块生成 Annotation 类和 AnnotationDef。
+    /// <para>
+    /// 生成产物：
+    /// - Annotations/{Name}Annotation.cs — Runtime Annotation 类
+    /// - Editor/AnnotationDefs.{SourceName}.cs — Editor AnnotationDefinitionProvider
+    /// </para>
+    /// </summary>
+    internal static class SbdefAnnotationEmitter
+    {
+        public static Dictionary<string, string> Emit(SbdefFile ast, string sourceName)
+        {
+            var output = new Dictionary<string, string>();
+            var annotationDefs = new List<string>();
+            
+            // 阶段4：构建 Annotation → List<MarkerTypeId> 映射
+            var annotationToMarkers = new Dictionary<string, List<string>>();
+
+            // 1. 处理顶层独立 Annotation（阶段4）
+            foreach (var stmt in ast.Statements)
+            {
+                if (stmt is AnnotationDecl annotation)
+                {
+                    var className = $"{annotation.Name}Annotation";
+                    var runtimeCode = GenerateAnnotationClassFromDecl(annotation, className);
+                    output[$"Annotations/{className}.cs"] = runtimeCode;
+                    
+                    // 初始化映射（后续收集使用该 Annotation 的 Marker）
+                    annotationToMarkers[annotation.Name] = new List<string>();
+                }
+            }
+
+            // 2. 处理嵌套式 Annotation（阶段3，兼容旧代码）
+            foreach (var stmt in ast.Statements)
+            {
+                if (stmt is MarkerDecl marker && marker.Annotations != null)
+                {
+                    foreach (var annotation in marker.Annotations)
+                    {
+                        var className = $"{annotation.Name}Annotation";
+                        var runtimeCode = GenerateAnnotationClassFromBlock(annotation, className);
+                        output[$"Annotations/{className}.cs"] = runtimeCode;
+                        
+                        // 嵌套式 Annotation 自动关联到当前 Marker
+                        if (!annotationToMarkers.ContainsKey(annotation.Name))
+                            annotationToMarkers[annotation.Name] = new List<string>();
+                        annotationToMarkers[annotation.Name].Add(marker.Name);
+                    }
+                }
+            }
+
+            // 3. 收集 use_annotations 声明（阶段4）
+            foreach (var stmt in ast.Statements)
+            {
+                if (stmt is MarkerDecl marker && marker.UsedAnnotations != null)
+                {
+                    foreach (var annotationName in marker.UsedAnnotations)
+                    {
+                        // 如果 Annotation 不在当前文件中，可能定义在其他 .sbdef 文件（如 annotations.sbdef）
+                        // 先添加到映射表，如果最终没有生成对应的 Annotation 类，AnnotationDef 会失败
+                        if (!annotationToMarkers.ContainsKey(annotationName))
+                            annotationToMarkers[annotationName] = new List<string>();
+                        
+                        annotationToMarkers[annotationName].Add(marker.Name);
+                    }
+                }
+            }
+
+            // 4. 生成 AnnotationDef（使用收集的 ApplicableMarkerTypes）
+            foreach (var (annotationName, markerNames) in annotationToMarkers)
+            {
+                if (markerNames.Count > 0)
+                {
+                    var className = $"{annotationName}Annotation";
+                    var displayName = annotationName; // 简化版，实际应从 AST 读取
+                    annotationDefs.Add(GenerateAnnotationDefWithMarkers(annotationName, className, displayName, markerNames));
+                }
+            }
+
+            // 5. 生成 AnnotationDefs 文件
+            if (annotationDefs.Count > 0)
+            {
+                var defsCode = GenerateAnnotationDefsFile(annotationDefs, sourceName);
+                output[$"Editor/AnnotationDefs.{ToPascal(sourceName)}.cs"] = defsCode;
+            }
+
+            // 调试日志
+            UnityEngine.Debug.Log($"[SbdefAnnotationEmitter] {sourceName}.sbdef → {output.Count} 个文件: {string.Join(", ", output.Keys)}");
+
+            return output;
+        }
+
+        private static string GenerateAnnotationClassFromDecl(AnnotationDecl annotation, string className)
+        {
+            return GenerateAnnotationClassCore(annotation.Name, annotation.DisplayName, annotation.Fields, className);
+        }
+
+        private static string GenerateAnnotationClassFromBlock(AnnotationBlockDecl annotation, string className)
+        {
+            return GenerateAnnotationClassCore(annotation.Name, annotation.DisplayName, annotation.Fields, className);
+        }
+
+        private static string GenerateAnnotationClassCore(string name, string? displayName, List<FieldDecl> fields, string className)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("// <auto-generated>");
+            sb.AppendLine($"// 由 SbdefCodegen 从 {name}.sbdef 生成，请勿手动修改。");
+            sb.AppendLine("// </auto-generated>");
+            sb.AppendLine("#nullable enable");
+            sb.AppendLine("using System;");
+            sb.AppendLine("using System.Collections.Generic;");
+            sb.AppendLine("using System.Linq;");
+            sb.AppendLine("using UnityEngine;");
+            sb.AppendLine("using SceneBlueprint.Runtime.Markers.Annotations;");
+            sb.AppendLine();
+            sb.AppendLine("namespace SceneBlueprintUser.Annotations");
+            sb.AppendLine("{");
+
+            // 生成辅助类型（enum / [Serializable] class）
+            GenerateHelperTypes(sb, fields, prefix: "");
+
+            // 主 Annotation 类
+            sb.AppendLine($"    public class {className} : MarkerAnnotation");
+            sb.AppendLine("    {");
+            sb.AppendLine($"        public override string AnnotationTypeId => \"{name}\";");
+            sb.AppendLine();
+
+            foreach (var field in fields)
+                GenerateField(sb, field, 2, prefix: "");
+
+            // 生成 CollectExportData
+            sb.AppendLine();
+            sb.AppendLine("        public override void CollectExportData(IDictionary<string, object> data)");
+            sb.AppendLine("        {");
+            foreach (var field in fields)
+                GenerateExportStatement(sb, field, indent: 3, prefix: "");
+            sb.AppendLine("        }");
+
+            sb.AppendLine("    }");
+            sb.AppendLine("}");
+            return sb.ToString();
+        }
+
+        /// <summary>在命名空间级别生成辅助类型（enum + [Serializable] 数据类）</summary>
+        private static void GenerateHelperTypes(StringBuilder sb, List<FieldDecl> fields, string prefix)
+        {
+            foreach (var field in fields)
+            {
+                var pascalName = ToPascal(field.Name);
+
+                if (field.TypeName == "enum" && field.EnumValues != null)
+                {
+                    sb.AppendLine($"    public enum {prefix}{pascalName}Type");
+                    sb.AppendLine("    {");
+                    foreach (var ev in field.EnumValues)
+                        sb.AppendLine($"        {ev},");
+                    sb.AppendLine("    }");
+                    sb.AppendLine();
+                }
+                else if (field.TypeName == "list" && field.NestedFields != null)
+                {
+                    var itemPrefix = $"{prefix}{pascalName}";
+                    // 先递归生成嵌套字段的辅助类型
+                    GenerateHelperTypes(sb, field.NestedFields, prefix: itemPrefix);
+                    // 生成数据类
+                    sb.AppendLine("    [Serializable]");
+                    sb.AppendLine($"    public class {itemPrefix}Item");
+                    sb.AppendLine("    {");
+                    foreach (var nested in field.NestedFields)
+                        GenerateField(sb, nested, 2, prefix: itemPrefix);
+                    sb.AppendLine("    }");
+                    sb.AppendLine();
+                }
+            }
+        }
+
+        private static void GenerateExportStatement(StringBuilder sb, FieldDecl field, int indent, string prefix)
+        {
+            var indentStr = new string(' ', indent * 4);
+            var camelName = ToCamel(field.Name);
+            var pascalName = ToPascal(field.Name);
+
+            if (field.TypeName == "list" && field.NestedFields != null)
+            {
+                sb.AppendLine($"{indentStr}data[\"{camelName}\"] = {pascalName}.Select(e => (object)new Dictionary<string, object>");
+                sb.AppendLine($"{indentStr}{{");
+                foreach (var nested in field.NestedFields)
+                {
+                    var nestedCamel = ToCamel(nested.Name);
+                    var nestedPascal = ToPascal(nested.Name);
+                    var valueExpr = nested.TypeName == "enum" ? $"e.{nestedPascal}.ToString()" : $"e.{nestedPascal}";
+                    sb.AppendLine($"{indentStr}    [\"{nestedCamel}\"] = {valueExpr},");
+                }
+                sb.AppendLine($"{indentStr}}}).ToList<object>();");
+            }
+            else if (field.TypeName == "enum")
+            {
+                sb.AppendLine($"{indentStr}data[\"{camelName}\"] = {pascalName}.ToString();");
+            }
+            else
+            {
+                sb.AppendLine($"{indentStr}data[\"{camelName}\"] = {pascalName};");
+            }
+        }
+
+        private static void GenerateField(StringBuilder sb, FieldDecl field, int indent, string prefix)
+        {
+            var indentStr = new string(' ', indent * 4);
+            var fieldName = ToPascal(field.Name);
+
+            if (!string.IsNullOrEmpty(field.Tooltip))
+                sb.AppendLine($"{indentStr}[Tooltip(\"{field.Tooltip}\")]");
+
+            if (!string.IsNullOrEmpty(field.Min) && !string.IsNullOrEmpty(field.Max))
+            {
+                var min = field.TypeName == "float" ? EnsureFloatSuffix(field.Min) : field.Min;
+                var max = field.TypeName == "float" ? EnsureFloatSuffix(field.Max) : field.Max;
+                sb.AppendLine($"{indentStr}[Range({min}, {max})]");
+            }
+            else if (!string.IsNullOrEmpty(field.Min))
+            {
+                var min = field.TypeName == "float" ? EnsureFloatSuffix(field.Min) : field.Min;
+                sb.AppendLine($"{indentStr}[Min({min})]");
+            }
+
+            string csType = MapType(field, prefix);
+            string defaultValue = GetDefaultValue(field, prefix);
+
+            sb.AppendLine($"{indentStr}public {csType} {fieldName} = {defaultValue};");
+            sb.AppendLine();
+        }
+
+        private static string MapType(FieldDecl field, string prefix)
+        {
+            var pascalName = ToPascal(field.Name);
+            return field.TypeName switch
+            {
+                "string" => "string",
+                "int" => "int",
+                "float" => "float",
+                "bool" => "bool",
+                "enum" => $"{prefix}{pascalName}Type",
+                "list" => $"List<{prefix}{pascalName}Item>",
+                _ => "object"
+            };
+        }
+
+        private static string EnsureFloatSuffix(string value)
+        {
+            return value.EndsWith("f") || value.EndsWith("F") ? value : value + "f";
+        }
+
+        private static string GetDefaultValue(FieldDecl field, string prefix)
+        {
+            var pascalName = ToPascal(field.Name);
+
+            if (!string.IsNullOrEmpty(field.DefaultValue))
+            {
+                if (field.TypeName == "string") return $"\"{field.DefaultValue}\"";
+                if (field.TypeName == "float") return EnsureFloatSuffix(field.DefaultValue);
+                return field.DefaultValue;
+            }
+
+            return field.TypeName switch
+            {
+                "string" => "\"\"",
+                "int" => "0",
+                "float" => "0f",
+                "bool" => "false",
+                "enum" => field.EnumValues?.Count > 0
+                    ? $"{prefix}{pascalName}Type.{field.EnumValues[0]}"
+                    : "default",
+                "list" => "new()",
+                _ => "default!"
+            };
+        }
+
+        private static string GenerateAnnotationDefWithMarkers(string annotationName, string className, string displayName, List<string> markerNames)
+        {
+            var markerTypeIds = string.Join(", ", markerNames.Select(m => $"UMarkerTypeIds.{m}"));
+            return $@"
+    [AnnotationDef(""{annotationName}"")]
+    public class {annotationName}AnnotationDef : IAnnotationDefinitionProvider
+    {{
+        public AnnotationDefinition Define() => new AnnotationDefinition
+        {{
+            TypeId = ""{annotationName}"",
+            DisplayName = ""{displayName}"",
+            ComponentType = typeof({className}),
+            ApplicableMarkerTypes = new[] {{ {markerTypeIds} }},
+            AllowMultiple = false
+        }};
+    }}";
+        }
+
+        private static string GenerateAnnotationDefsFile(List<string> defs, string sourceName)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("// <auto-generated>");
+            sb.AppendLine($"// 由 SbdefCodegen 生成");
+            sb.AppendLine("// </auto-generated>");
+            sb.AppendLine("#nullable enable");
+            sb.AppendLine("using SceneBlueprint.Editor.Markers.Annotations;");
+            sb.AppendLine("using SceneBlueprintUser.Annotations;");
+            sb.AppendLine("using SceneBlueprintUser.Generated;");
+            sb.AppendLine();
+            sb.AppendLine("namespace SceneBlueprintUser.Editor");
+            sb.AppendLine("{");
+            foreach (var def in defs)
+            {
+                sb.AppendLine(def);
+            }
+            sb.AppendLine("}");
+            return sb.ToString();
+        }
+
+        private static string ToPascal(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return s;
+            return char.ToUpper(s[0]) + s.Substring(1);
+        }
+
+        private static string ToCamel(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return s;
+            return char.ToLower(s[0]) + s.Substring(1);
+        }
+    }
+}

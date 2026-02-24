@@ -8,6 +8,8 @@ namespace SceneBlueprint.Editor.CodeGen.Sbdef
     internal enum TokenKind
     {
         Action, Port, Flow, Marker, Label, Gizmo, Min, Max,
+        Extends, Annotation, EditorTool, Enum, Field,
+        Default, Range, ShowIf, Tooltip, AutoAddAnnotation,
         Identifier,
         StringLiteral,
         NumberLiteral,
@@ -15,6 +17,7 @@ namespace SceneBlueprint.Editor.CodeGen.Sbdef
         LBrace, RBrace,
         Equals,
         LParen, RParen,
+        Comma,
         EOF,
     }
 
@@ -48,6 +51,7 @@ namespace SceneBlueprint.Editor.CodeGen.Sbdef
                     case '=': tokens.Add(new Token(TokenKind.Equals, "=", line)); i++; continue;
                     case '(': tokens.Add(new Token(TokenKind.LParen, "(", line)); i++; continue;
                     case ')': tokens.Add(new Token(TokenKind.RParen, ")", line)); i++; continue;
+                    case ',': tokens.Add(new Token(TokenKind.Comma, ",", line)); i++; continue;
                 }
 
                 // 字符串字面量
@@ -103,6 +107,16 @@ namespace SceneBlueprint.Editor.CodeGen.Sbdef
                         "gizmo"  => TokenKind.Gizmo,
                         "min"    => TokenKind.Min,
                         "max"    => TokenKind.Max,
+                        "extends" => TokenKind.Extends,
+                        "annotation" => TokenKind.Annotation,
+                        "editor_tool" => TokenKind.EditorTool,
+                        "enum"   => TokenKind.Enum,
+                        "field"  => TokenKind.Field,
+                        "default" => TokenKind.Default,
+                        "range"  => TokenKind.Range,
+                        "show_if" => TokenKind.ShowIf,
+                        "tooltip" => TokenKind.Tooltip,
+                        "auto_add_annotation" => TokenKind.AutoAddAnnotation,
                         "true"   => TokenKind.BoolLiteral,
                         "false"  => TokenKind.BoolLiteral,
                         _        => TokenKind.Identifier,

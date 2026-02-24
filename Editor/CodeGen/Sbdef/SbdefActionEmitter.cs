@@ -9,14 +9,14 @@ namespace SceneBlueprint.Editor.CodeGen.Sbdef
     /// <summary>
     /// 将 SbdefFile 中的 ActionDecl 节点生成两份 C# 代码：
     /// <list type="bullet">
-    /// <item>UAT.{Name}.g.cs — 用户层 Action TypeId 常量（生成到用户项目 Generated/）</item>
+    /// <item>UAT.{Name}.cs — 用户层 Action TypeId 常量（生成到用户项目 Generated/）</item>
     /// </list>
     /// </summary>
     internal static class SbdefActionEmitter
     {
         /// <param name="ast">解析结果</param>
         /// <param name="sourceName">不含扩展名的 .sbdef 文件名，用于注释和类名后缀</param>
-        /// <returns>键=文件名（含 .g.cs），值=文件内容</returns>
+        /// <returns>键=文件名（含 .cs），值=文件内容</returns>
         public static Dictionary<string, string> Emit(SbdefFile ast, string sourceName)
         {
             var actions = ast.Statements.OfType<ActionDecl>().ToList();
@@ -37,7 +37,7 @@ namespace SceneBlueprint.Editor.CodeGen.Sbdef
 
                 // v0.1: 只生成 UAT 类型 ID 常量（输出到用户项目 Generated/）
                 // v0.2 计划: 添加 port 类型注解后生成 ActionPortIds（含 PropertyKey<T>）
-                result[$"UAT.{pascal}.g.cs"] = EmitUAT(grp, pascal, sourceName);
+                result[$"UAT.{pascal}.cs"] = EmitUAT(grp, pascal, sourceName);
             }
 
             return result;

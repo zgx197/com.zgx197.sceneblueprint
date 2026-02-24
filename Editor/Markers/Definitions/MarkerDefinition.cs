@@ -42,6 +42,12 @@ namespace SceneBlueprint.Editor.Markers.Definitions
         public float DefaultSpacing { get; set; } = 2f;
 
         /// <summary>
+        /// 菜单分组名称——在创建菜单中将同组标记归在同一子菜单下。
+        /// <para>如 "刷怪"、"触发"、"摄像机"。为 null 或空时放入顶层。</para>
+        /// </summary>
+        public string? Group { get; set; }
+
+        /// <summary>
         /// 创建标记后的初始化回调（可选）。
         /// <para>
         /// 用于设置类型特有的默认值（如 AreaMarker 的 BoxSize、Shape 等）。

@@ -23,7 +23,8 @@ namespace SceneBlueprint.Editor.Markers.ToolKit
     /// - 微调：策划直接在 Hierarchy 中选中 PointMarker，用 Unity 原生 W/E/R 操作
     /// </para>
     /// </summary>
-    [CustomEditor(typeof(AreaMarker))]
+    // TODO: 阶段2迁移 - 位置生成工具将迁移到业务层作为 IMarkerEditorExtension
+    // [CustomEditor(typeof(AreaMarker))]
     public class AreaMarkerEditor : UnityEditor.Editor
     {
         // ── 位置生成工具状态 ──

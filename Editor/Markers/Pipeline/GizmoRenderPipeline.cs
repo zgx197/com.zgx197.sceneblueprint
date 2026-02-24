@@ -52,7 +52,6 @@ namespace SceneBlueprint.Editor.Markers.Pipeline
         // ─── 交互服务（M2 拆分）───
         private static readonly IMarkerHitTestService _hitTestService = new DefaultMarkerHitTestService();
         private static readonly IMarkerSelectionController _selectionController = new DefaultMarkerSelectionController();
-        private static readonly IMarkerOverlayPresenter _overlayPresenter = new SceneStatusOverlayPresenter();
         private static bool _selectionInputDrivenByTool;
 
         private static MarkerInteractionMode _interactionMode = MarkerInteractionMode.Edit;
@@ -140,27 +139,55 @@ namespace SceneBlueprint.Editor.Markers.Pipeline
             SceneView.RepaintAll();
         }
 
-        /// <summary>反射自动发现并注册当前程序集中所有 IMarkerGizmoRenderer 实现</summary>
+        /// <summary>
+        /// 反射自动发现并注册所有已加载程序集中的 IMarkerGizmoRenderer 实现。
+        /// <para>扫描范围：所有已加载程序集（含用户业务代码），跳过系统/Unity 内置程序集。</para>
+        /// </summary>
         private static void AutoDiscoverRenderers()
         {
             _renderers.Clear();
 
             var interfaceType = typeof(IMarkerGizmoRenderer);
-            var assembly = Assembly.GetExecutingAssembly();
 
-            foreach (var type in assembly.GetTypes())
+            foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
             {
-                if (type.IsAbstract || type.IsInterface) continue;
-                if (!interfaceType.IsAssignableFrom(type)) continue;
+                // 跳过系统/Unity 内置程序集，避免无意义扫描
+                var asmName = assembly.GetName().Name ?? "";
+                if (asmName.StartsWith("System",          StringComparison.Ordinal) ||
+                    asmName.StartsWith("mscorlib",         StringComparison.Ordinal) ||
+                    asmName.StartsWith("Microsoft.",       StringComparison.Ordinal) ||
+                    asmName.StartsWith("UnityEngine",      StringComparison.Ordinal) ||
+                    asmName.StartsWith("UnityEditor",      StringComparison.Ordinal) ||
+                    asmName.StartsWith("Unity.",           StringComparison.Ordinal) ||
+                    asmName.StartsWith("com.unity.",       StringComparison.Ordinal) ||
+                    asmName.StartsWith("nunit.",           StringComparison.Ordinal))
+                    continue;
 
+                Type[] types;
                 try
                 {
-                    var renderer = (IMarkerGizmoRenderer)Activator.CreateInstance(type);
-                    _renderers[renderer.TargetType] = renderer;
+                    types = assembly.GetTypes();
                 }
-                catch (Exception ex)
+                catch (ReflectionTypeLoadException ex)
                 {
-                    SBLog.Warn(SBLogTags.Pipeline, $"无法实例化 Renderer {type.Name}: {ex.Message}");
+                    // 部分类型加载失败时，仍处理已成功加载的类型
+                    types = ex.Types.Where(t => t != null).ToArray()!;
+                }
+
+                foreach (var type in types)
+                {
+                    if (type == null || type.IsAbstract || type.IsInterface) continue;
+                    if (!interfaceType.IsAssignableFrom(type)) continue;
+
+                    try
+                    {
+                        var renderer = (IMarkerGizmoRenderer)Activator.CreateInstance(type);
+                        _renderers[renderer.TargetType] = renderer;
+                    }
+                    catch (Exception ex)
+                    {
+                        SBLog.Warn(SBLogTags.Pipeline, $"无法实例化 Renderer {type.Name}: {ex.Message}");
+                    }
                 }
             }
 
@@ -176,7 +203,6 @@ namespace SceneBlueprint.Editor.Markers.Pipeline
         private static void OnSceneGUI(SceneView sceneView)
         {
             _ = sceneView;
-            _overlayPresenter.Draw(_interactionMode, SceneViewMarkerTool.IsEnabled);
 
             // 获取缓存的标记列表
             var allMarkers = MarkerCache.GetAll();
@@ -402,40 +428,41 @@ namespace SceneBlueprint.Editor.Markers.Pipeline
         {
             var pos = marker.transform.position;
 
-            switch (marker)
+            // 使用 is 运算符支持继承（switch 模式匹配在某些情况下可能不匹配子类）
+            if (marker is PointMarker pm)
             {
-                case PointMarker pm:
-                    return new Bounds(pos, Vector3.one * pm.GizmoRadius * 2f);
-
-                case AreaMarker am:
-                    if (am.Shape == AreaShape.Box)
-                    {
-                        var size = am.BoxSize;
-                        // 考虑旋转后的包围盒
-                        var rotatedSize = am.transform.rotation * size;
-                        return new Bounds(pos, new Vector3(
-                            Mathf.Abs(rotatedSize.x),
-                            Mathf.Abs(rotatedSize.y),
-                            Mathf.Abs(rotatedSize.z)));
-                    }
-                    else
-                    {
-                        // Polygon：遍历世界坐标顶点计算包围盒
-                        var verts = am.GetWorldVertices();
-                        if (verts.Count == 0)
-                            return new Bounds(pos, Vector3.one * 2f);
-
-                        var bounds = new Bounds(verts[0], Vector3.zero);
-                        for (int i = 1; i < verts.Count; i++)
-                            bounds.Encapsulate(verts[i]);
-                        // 扩展高度
-                        bounds.Encapsulate(bounds.center + Vector3.up * am.Height);
-                        return bounds;
-                    }
-
-                default:
-                    return new Bounds(pos, Vector3.one * 2f);
+                return new Bounds(pos, Vector3.one * pm.GizmoRadius * 2f);
             }
+            
+            if (marker is AreaMarker am)
+            {
+                if (am.Shape == AreaShape.Box)
+                {
+                    var size = am.BoxSize;
+                    // 考虑旋转后的包围盒
+                    var rotatedSize = am.transform.rotation * size;
+                    return new Bounds(pos, new Vector3(
+                        Mathf.Abs(rotatedSize.x),
+                        Mathf.Abs(rotatedSize.y),
+                        Mathf.Abs(rotatedSize.z)));
+                }
+                else
+                {
+                    // Polygon：遍历世界坐标顶点计算包围盒
+                    var verts = am.GetWorldVertices();
+                    if (verts.Count == 0)
+                        return new Bounds(pos, Vector3.one * 2f);
+
+                    var bounds = new Bounds(verts[0], Vector3.zero);
+                    for (int i = 1; i < verts.Count; i++)
+                        bounds.Encapsulate(verts[i]);
+                    // 扩展高度
+                    bounds.Encapsulate(bounds.center + Vector3.up * am.Height);
+                    return bounds;
+                }
+            }
+
+            return new Bounds(pos, Vector3.one * 2f);
         }
     }
 }

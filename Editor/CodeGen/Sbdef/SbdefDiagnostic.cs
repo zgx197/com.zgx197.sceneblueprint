@@ -26,7 +26,24 @@ namespace SceneBlueprint.Editor.CodeGen.Sbdef
             // 格式与 Unity 编译错误一致，双击可跳转（对 .sbdef 文件无法自动跳转，但格式清晰）
             UnityEngine.Debug.LogError(
                 $"[.sbdef] {fileName}{location}: {ex.Message}\n" +
-                $"  → {assetPath}");
+                $"  → {assetPath}\n{ex.StackTrace}");
+        }
+
+        /// <summary>
+        /// 标明具体阶段（词法分析 / 语法解析 / 代码生成 / 文件写入）的错误。
+        /// </summary>
+        /// <param name="assetPath">Unity 相对路径</param>
+        /// <param name="phase">失败阶段名称，如 "词法分析"、"语法解析"、"SbdefMarkerEmitter"</param>
+        /// <param name="ex">捕获的异常</param>
+        public static void LogPhaseError(string assetPath, string phase, System.Exception ex)
+        {
+            var fileName = System.IO.Path.GetFileName(assetPath);
+            var line     = ExtractLine(ex.Message);
+            var location = line.HasValue ? $"({line.Value})" : "";
+
+            UnityEngine.Debug.LogError(
+                $"[.sbdef] {fileName}{location} [{phase}]: {ex.Message}\n" +
+                $"  → {assetPath}\n{ex.StackTrace}");
         }
 
         /// <summary>从异常消息中提取行号（匹配 "（行 N）" 或 "行 N" 模式）</summary>
