@@ -107,6 +107,7 @@ namespace SceneBlueprint.Editor.CodeGen.Sbdef
             sb.AppendLine("// </auto-generated>");
             sb.AppendLine("#nullable enable");
             sb.AppendLine("using NodeGraph.Math;");
+            sb.AppendLine("using SceneBlueprint.Contract;");
             sb.AppendLine("using SceneBlueprint.Core;");
             sb.AppendLine();
             sb.AppendLine("namespace SceneBlueprintUser.Generated");
@@ -243,7 +244,7 @@ namespace SceneBlueprint.Editor.CodeGen.Sbdef
                     {
                         var fLabel = f.Label ?? f.Name;
                         var fKey   = ToCamelCase(f.Name);
-                        fieldLines.Append(BuildNestedFieldProp(fKey, fLabel, f.TypeName));
+                        fieldLines.Append(BuildNestedFieldProp(fKey, fLabel, f.TypeName, f.EnumValues));
                         fieldLines.Append(", ");
                     }
                     return $"Prop.StructList({keyRef}, {labelLit}, new PropertyDefinition[] {{ {fieldLines}}}, summaryFormat: {summary}, order: {order}),";
@@ -289,9 +290,15 @@ namespace SceneBlueprint.Editor.CodeGen.Sbdef
         }
 
         /// <summary>为 StructList 嵌套字段生成 Prop.* 调用片段（不含尾部逗号）</summary>
-        private static string BuildNestedFieldProp(string camelKey, string label, string typeName)
+        private static string BuildNestedFieldProp(string camelKey, string label, string typeName,
+            System.Collections.Generic.List<string>? enumValues = null)
         {
             var labelLit = $"\"{EscapeString(label)}\"";
+            if (typeName.ToLower() == "enum" && enumValues != null && enumValues.Count > 0)
+            {
+                var opts = string.Join(", ", enumValues.Select(v => $"\"{v}\""));
+                return $"Prop.Enum(\"{camelKey}\", {labelLit}, new[] {{ {opts} }})";
+            }
             return typeName.ToLower() switch
             {
                 "float"  => $"Prop.Float(\"{camelKey}\", {labelLit})",

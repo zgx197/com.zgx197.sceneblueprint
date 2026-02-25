@@ -203,6 +203,22 @@ namespace SceneBlueprint.Editor.Interpreter
                         GUILayout.Label(diffLabel, GUILayout.Width(120));
                         GUI.contentColor = prevColor;
                     }
+
+                    // 实时模式下，对 Trigger.* 触发节点提供强制完成按钮（测试用）
+                    // 只有需要等待外部条件的触发节点才需要手动触发，其他节点会自行推进
+                    if (snapshot == null &&
+                        (phase == ActionPhase.Running || phase == ActionPhase.Listening) &&
+                        typeId.StartsWith("Trigger.", System.StringComparison.Ordinal))
+                    {
+                        var prevBg = GUI.backgroundColor;
+                        GUI.backgroundColor = new Color(1f, 0.6f, 0.2f);
+                        if (GUILayout.Button("强制完成▶", GUILayout.Width(76)))
+                        {
+                            _runner!.Frame!.States[i].Phase = ActionPhase.Completed;
+                            Repaint();
+                        }
+                        GUI.backgroundColor = prevBg;
+                    }
                 }
             }
 

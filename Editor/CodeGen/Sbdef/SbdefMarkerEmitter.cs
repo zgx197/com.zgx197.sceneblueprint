@@ -100,14 +100,18 @@ namespace SceneBlueprint.Editor.CodeGen.Sbdef
                 sb.AppendLine($"        // gizmo: {m.GizmoShape}{param}  — 在对应的 Editor Gizmo Drawer 中实现");
             }
 
+            // Reset()：所有 Marker 统一生成，确保 MarkerId 自动生成
+            sb.AppendLine();
+            sb.AppendLine("#if UNITY_EDITOR");
+            sb.AppendLine("        protected override void Reset()");
+            sb.AppendLine("        {");
+            sb.AppendLine("            base.Reset();");
+            sb.AppendLine("            if (string.IsNullOrEmpty(MarkerId))");
+            sb.AppendLine("                MarkerId = System.Guid.NewGuid().ToString(\"N\").Substring(0, 12);");
+
             // 阶段4：声明式关联 use_annotations
             if (m.UsedAnnotations != null && m.UsedAnnotations.Count > 0)
             {
-                sb.AppendLine();
-                sb.AppendLine("#if UNITY_EDITOR");
-                sb.AppendLine("        protected override void Reset()");
-                sb.AppendLine("        {");
-                sb.AppendLine("            base.Reset();");
                 foreach (var annotationName in m.UsedAnnotations)
                 {
                     var annotationClass = $"SceneBlueprintUser.Annotations.{annotationName}Annotation";
@@ -115,17 +119,10 @@ namespace SceneBlueprint.Editor.CodeGen.Sbdef
                     sb.AppendLine($"            if (GetComponent<{annotationClass}>() == null)");
                     sb.AppendLine($"                gameObject.AddComponent<{annotationClass}>();");
                 }
-                sb.AppendLine("        }");
-                sb.AppendLine("#endif");
             }
             // 阶段3：嵌套式 Annotation（兼容旧代码）
             else if (m.Annotations != null && m.Annotations.Count > 0)
             {
-                sb.AppendLine();
-                sb.AppendLine("#if UNITY_EDITOR");
-                sb.AppendLine("        protected override void Reset()");
-                sb.AppendLine("        {");
-                sb.AppendLine("            base.Reset();");
                 foreach (var annotation in m.Annotations)
                 {
                     var annotationClass = $"SceneBlueprintUser.Annotations.{annotation.Name}Annotation";
@@ -133,9 +130,10 @@ namespace SceneBlueprint.Editor.CodeGen.Sbdef
                     sb.AppendLine($"            if (GetComponent<{annotationClass}>() == null)");
                     sb.AppendLine($"                gameObject.AddComponent<{annotationClass}>();");
                 }
-                sb.AppendLine("        }");
-                sb.AppendLine("#endif");
             }
+
+            sb.AppendLine("        }");
+            sb.AppendLine("#endif");
 
             sb.AppendLine("    }");
             sb.AppendLine("}");
