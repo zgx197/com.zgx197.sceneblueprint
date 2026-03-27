@@ -1,9 +1,14 @@
 #nullable enable
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.Reflection;
+using System.Text;
 using SceneBlueprint.Contract;
+using SceneBlueprint.Runtime;
+using SceneBlueprint.Runtime.Interpreter.Adapters;
 using SceneBlueprint.Runtime.Interpreter.Diagnostics;
+using SceneBlueprint.Runtime.Interpreter.Systems;
 
 namespace SceneBlueprint.Runtime.Interpreter
 {
@@ -30,11 +35,15 @@ namespace SceneBlueprint.Runtime.Interpreter
     /// System 注册迁移到 SystemSetup.CreateSystems()。
     /// </para>
     /// </summary>
-    public class BlueprintRunner
+    public partial class BlueprintRunner
     {
         private readonly List<BlueprintSystemBase> _systems = new();
         private bool _systemsSorted;
         private bool _initialized;
+        private ISignalBus? _signalBus;
+
+        /// <summary>帧适配器——桥接 BlueprintFrame 与 FrameView</summary>
+        private readonly ClassFrameAdapter _adapter = new();
 
         /// <summary>当前 Frame（世界状态）</summary>
         public BlueprintFrame? Frame { get; private set; }
@@ -92,6 +101,18 @@ namespace SceneBlueprint.Runtime.Interpreter
             return null;
         }
 
+        /// <summary>返回当前 Runner 已注册 System 的名称快照，供 Editor 诊断与测试使用。</summary>
+        public IReadOnlyList<string> GetRegisteredSystemNames()
+        {
+            var names = new List<string>(_systems.Count);
+            for (var index = 0; index < _systems.Count; index++)
+            {
+                names.Add(_systems[index].Name);
+            }
+
+            return new ReadOnlyCollection<string>(names);
+        }
+
         // ══════════════════════════════════════════
         //  加载与初始化
         // ══════════════════════════════════════════
@@ -116,6 +137,8 @@ namespace SceneBlueprint.Runtime.Interpreter
                 return;
             }
 
+            Frame.Runner = this;
+
             Log?.Invoke($"[BlueprintRunner] 蓝图已加载: {Frame.BlueprintId} ({Frame.BlueprintName}), " +
                         $"Actions={Frame.ActionCount}, Transitions={Frame.Transitions.Length}");
 
@@ -130,7 +153,11 @@ namespace SceneBlueprint.Runtime.Interpreter
                 LogWarning?.Invoke("[BlueprintRunner] 蓝图中未找到 Flow.Start 节点");
             }
 
-            // 3. 排序 System 并初始化
+            // 3. 设置适配器
+            _adapter.SetFrame(Frame);
+            InjectFrameReferences(Frame);
+
+            // 4. 排序 System 并初始化
             EnsureSystemsSorted();
             foreach (var sys in _systems)
             {
@@ -156,10 +183,15 @@ namespace SceneBlueprint.Runtime.Interpreter
                 return;
             }
 
+            Frame.Runner = this;
+
             if (Frame.StartActionIndex >= 0)
             {
                 Frame.States[Frame.StartActionIndex].Phase = ActionPhase.Running;
             }
+
+            _adapter.SetFrame(Frame);
+            InjectFrameReferences(Frame);
 
             EnsureSystemsSorted();
             foreach (var sys in _systems)
@@ -189,24 +221,29 @@ namespace SceneBlueprint.Runtime.Interpreter
             if (Frame == null || Frame.IsCompleted)
                 return;
 
-            // 调试暂停：跳过模拟，保持 Frame 状态冻结
             if (DebugController?.IsPaused == true)
                 return;
 
-            // 按顺序执行所有 System
+            // 1. 创建 FrameView（零拷贝，States 直接引用 Frame.States）
+            var view = _adapter.BeginTick(Frame);
+
+            // 2. 按顺序执行所有 System（通过 FrameView 统一读写）
             for (int i = 0; i < _systems.Count; i++)
             {
                 var sys = _systems[i];
                 if (sys.Enabled)
                 {
-                    sys.Update(Frame);
+                    sys.Update(ref view);
                 }
             }
 
-            // 递增 Tick 计数
+            // 3. 帧结束回写
+            _adapter.EndTick(Frame, ref view);
+
+            // 4. 递增 Tick 计数
             Frame.TickCount++;
 
-            // 更新所有 Running Action 的 TicksInPhase
+            // 5. 更新所有 Running Action 的 TicksInPhase
             for (int i = 0; i < Frame.States.Length; i++)
             {
                 if (Frame.States[i].Phase == ActionPhase.Running)
@@ -215,28 +252,55 @@ namespace SceneBlueprint.Runtime.Interpreter
                 }
             }
 
-            // 调试快照：tick 末记录历史（在完成检测之前，确保最后一帧也被记录）
-            DebugController?.OnTickCompleted(Frame);
-
-            // 检查完成条件：没有活跃 Action 且没有待处理事件
-            if (!Frame.HasActiveActions() && Frame.PendingEvents.Count == 0)
+            // 6. 死锁检测（必须在终态清理之前，否则清理会掩盖真实死锁）
+            for (int i = 0; i < Frame.States.Length; i++)
             {
-                Frame.IsCompleted = true;
-                Log?.Invoke($"[BlueprintRunner] 蓝图执行完毕 (Tick={Frame.TickCount})");
-            }
-
-            // 蓝图结束时，将所有 Listening 节点统一清理为 Completed
-            // 语义：蓝图结束 → 所有监听器下线，不会再有新事件到达
-            if (Frame.IsCompleted)
-            {
-                for (int i = 0; i < Frame.States.Length; i++)
+                if (Frame.States[i].Phase == ActionPhase.Completed && !Frame.States[i].EventEmitted)
                 {
-                    if (Frame.States[i].Phase == ActionPhase.Listening)
-                    {
-                        Frame.States[i].Phase = ActionPhase.Completed;
-                    }
+                    var typeId = Frame.Actions[i].TypeId;
+                    UnityEngine.Debug.LogWarning(
+                        $"[BlueprintRunner] 死锁警告: 节点 {typeId} (index={i}) " +
+                        $"已 Completed 但未发射端口事件！");
                 }
             }
+
+            // 7. 完成条件检查
+            // 路径 A: FlowSystem 在 Update 中已设置 Frame.IsCompleted = true（Flow.End 到达）
+            // 路径 B: 无活跃 Action（Running/WaitingTrigger）且无待消费事件
+            if (!Frame.IsCompleted && !Frame.HasActiveActions() && view.PendingEvents.Count == 0)
+            {
+                Frame.IsCompleted = true;
+            }
+
+            if (Frame.IsCompleted)
+            {
+                Log?.Invoke($"[BlueprintRunner] 蓝图执行完毕 (Tick={Frame.TickCount})");
+
+                // 8. 终态清理：蓝图结束后，将所有仍处于活跃/中间状态的节点统一设为 Completed。
+                // 这些节点在蓝图生命周期内不会自行进入 Completed（如 Flow.Filter 始终在
+                // Running ↔ Listening 循环），但蓝图结束意味着它们的使命已完成。
+                var cleanedNodes = new List<string>();
+                for (int i = 0; i < Frame.States.Length; i++)
+                {
+                    var phase = Frame.States[i].Phase;
+                    if (phase == ActionPhase.Running ||
+                        phase == ActionPhase.WaitingTrigger ||
+                        phase == ActionPhase.Listening)
+                    {
+                        cleanedNodes.Add(FormatActionState(Frame, i, phase.ToString()));
+                        Frame.States[i].Phase = ActionPhase.Completed;
+                        Frame.States[i].EventEmitted = true;
+                    }
+                }
+
+                if (BlueprintRuntimeSettings.Instance.EnableCompletionSummaryLogs)
+                {
+                    Log?.Invoke(BuildCompletionSummary(Frame, cleanedNodes));
+                }
+            }
+
+            // 9. 调试快照（在终态清理之后，确保快照反映蓝图的最终状态）
+            DebugController?.OnTickCompleted(Frame);
         }
 
         /// <summary>
@@ -264,6 +328,42 @@ namespace SceneBlueprint.Runtime.Interpreter
         //  清理
         // ══════════════════════════════════════════
 
+        /// <summary>设置信号总线（在 Load 之前调用）</summary>
+        public void SetSignalBus(ISignalBus bus)
+        {
+            _signalBus = bus ?? throw new ArgumentNullException(nameof(bus));
+            RegisterService<ISignalBus>(bus);
+            if (bus is IBlueprintEventHistorySignalBus historyAwareBus)
+            {
+                historyAwareBus.EventHistoryRecorder = GetService<IBlueprintEventHistoryRecorder>();
+            }
+
+            _adapter.SetSignalBus(bus);
+            BlueprintRunnerConfiguratorRegistry.ConfigureDefaultScopes(this);
+        }
+
+        public ISignalBus? SignalBus => _signalBus;
+
+        /// <summary>
+        /// 信号桥接器——外部系统与蓝图双向通信的统一入口。
+        /// <para>
+        /// 由 BlueprintRunnerFactory 自动创建并注入，业务层通过此属性访问。
+        /// FS 侧不使用 Bridge（直接操作 qtn 队列），此属性可能为 null。
+        /// </para>
+        /// </summary>
+        public ISignalBridge? Bridge { get; private set; }
+
+        /// <summary>设置信号桥接器（在 Load 之前调用，由 Factory 注入）</summary>
+        internal void SetSignalBridge(ISignalBridge bridge)
+        {
+            Bridge = bridge;
+            RegisterService<ISignalBridge>(bridge);
+            _adapter.SetSignalBridge(bridge as InMemorySignalBridge);
+        }
+
+        /// <summary>获取适配器的 Query 实例（用于外部查询）</summary>
+        public ClassActionQuery QueryAdapter => _adapter.Query;
+
         /// <summary>停止执行并清理资源</summary>
         public void Shutdown()
         {
@@ -277,7 +377,18 @@ namespace SceneBlueprint.Runtime.Interpreter
 
             Frame = null;
             _initialized = false;
+            ClearServices();
             Log?.Invoke("[BlueprintRunner] 已关闭");
+        }
+
+        /// <summary>为需要 BlueprintFrame 桥接的 System 注入引用（通过 IFrameAware 接口自动发现）</summary>
+        private void InjectFrameReferences(BlueprintFrame frame)
+        {
+            foreach (var sys in _systems)
+            {
+                if (sys is IFrameAware aware)
+                    aware.Frame = frame;
+            }
         }
 
         // ══════════════════════════════════════════
@@ -371,6 +482,60 @@ namespace SceneBlueprint.Runtime.Interpreter
                 if (!result.Contains(s)) result.Add(s);
 
             return result;
+        }
+
+        private static string BuildCompletionSummary(BlueprintFrame frame, List<string> cleanedNodes)
+        {
+            var completedCount = 0;
+            var idleCount = 0;
+            var runningCount = 0;
+            var listeningCount = 0;
+            var waitingTriggerCount = 0;
+
+            for (var i = 0; i < frame.States.Length; i++)
+            {
+                var phase = frame.States[i].Phase;
+                switch (phase)
+                {
+                    case ActionPhase.Completed:
+                        completedCount++;
+                        break;
+                    case ActionPhase.Idle:
+                        idleCount++;
+                        break;
+                    case ActionPhase.Running:
+                        runningCount++;
+                        break;
+                    case ActionPhase.Listening:
+                        listeningCount++;
+                        break;
+                    case ActionPhase.WaitingTrigger:
+                        waitingTriggerCount++;
+                        break;
+                }
+            }
+
+            var builder = new StringBuilder();
+            builder.Append("[BlueprintRunner] 运行摘要: ");
+            builder.Append($"blueprint={frame.BlueprintName}, tick={frame.TickCount}, actions={frame.ActionCount}, ");
+            builder.Append($"completed={completedCount}, idle={idleCount}, running={runningCount}, ");
+            builder.Append($"listening={listeningCount}, waitingTrigger={waitingTriggerCount}, pendingEvents={frame.PendingEvents.Count}");
+
+            if (cleanedNodes.Count > 0)
+            {
+                builder.AppendLine();
+                builder.Append("[BlueprintRunner] 终态清理已收口的节点: ");
+                builder.Append(string.Join(" | ", cleanedNodes));
+            }
+
+            return builder.ToString();
+        }
+
+        private static string FormatActionState(BlueprintFrame frame, int actionIndex, string phaseName)
+        {
+            var action = frame.Actions[actionIndex];
+            var state = frame.States[actionIndex];
+            return $"{action.TypeId}[index={actionIndex}, actionId={action.Id}, phase={phaseName}, ticksInPhase={state.TicksInPhase}]";
         }
     }
 }

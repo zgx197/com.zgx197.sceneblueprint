@@ -110,7 +110,7 @@ namespace SceneBlueprint.Core
         /// （Int→IntField, Float→FloatField, Bool→Toggle, String→TextField）。值始终以字符串形式存储。</para>
         /// </summary>
         public static PropertyDefinition String(string key, string displayName,
-            string defaultValue = "", string? category = null, string? visibleWhen = null, int order = 0,
+            string defaultValue = "", string? category = null, string? tooltip = null, string? visibleWhen = null, int order = 0,
             string? typeSourceKey = null)
         {
             return new PropertyDefinition
@@ -120,6 +120,7 @@ namespace SceneBlueprint.Core
                 Type = PropertyType.String,
                 DefaultValue = defaultValue,
                 Category = category,
+                Tooltip = tooltip,
                 VisibleWhen = visibleWhen,
                 Order = order,
                 TypeSourceKey = typeSourceKey
@@ -132,7 +133,7 @@ namespace SceneBlueprint.Core
         /// </summary>
         /// <typeparam name="T">C# 枚举类型</typeparam>
         public static PropertyDefinition Enum<T>(string key, string displayName,
-            string? category = null, string? visibleWhen = null, int order = 0) where T : struct, Enum
+            string? category = null, string? tooltip = null, string? visibleWhen = null, int order = 0) where T : struct, Enum
         {
             return new PropertyDefinition
             {
@@ -143,6 +144,7 @@ namespace SceneBlueprint.Core
                 // 自动从 C# 枚举类型提取所有选项名
                 EnumOptions = System.Enum.GetNames(typeof(T)),
                 Category = category,
+                Tooltip = tooltip,
                 VisibleWhen = visibleWhen,
                 Order = order
             };
@@ -156,7 +158,7 @@ namespace SceneBlueprint.Core
         /// <param name="defaultValue">默认值，为 null 时使用第一个选项</param>
         public static PropertyDefinition Enum(string key, string displayName,
             string[] options, string? defaultValue = null,
-            string? category = null, string? visibleWhen = null, int order = 0)
+            string? category = null, string? tooltip = null, string? visibleWhen = null, int order = 0)
         {
             return new PropertyDefinition
             {
@@ -167,6 +169,7 @@ namespace SceneBlueprint.Core
                 DefaultValue = defaultValue ?? (options.Length > 0 ? options[0] : ""),
                 EnumOptions = options,
                 Category = category,
+                Tooltip = tooltip,
                 VisibleWhen = visibleWhen,
                 Order = order
             };
@@ -197,8 +200,10 @@ namespace SceneBlueprint.Core
         /// 创建场景绑定属性——引用场景中的对象（区域、点位、路径等）。
         /// </summary>
         /// <param name="bindingType">绑定类型：Transform/Area/Path/Collider</param>
+        /// <param name="requirement">绑定约束（required/exclusive/annotation），为 null 时无约束</param>
         public static PropertyDefinition SceneBinding(string key, string displayName,
             BindingType bindingType,
+            MarkerRequirement? requirement = null,
             string? category = null, string? visibleWhen = null, int order = 0)
         {
             return new PropertyDefinition
@@ -207,6 +212,7 @@ namespace SceneBlueprint.Core
                 DisplayName = displayName,
                 Type = PropertyType.SceneBinding,
                 SceneBindingType = bindingType,
+                BindingRequirement = requirement,
                 Category = category,
                 VisibleWhen = visibleWhen,
                 Order = order
@@ -214,7 +220,7 @@ namespace SceneBlueprint.Core
         }
 
         /// <summary>
-        /// 创建标签属性。Phase 5 实现时会显示为 Tag 选择器。
+        /// 创建实体标签属性。Inspector 中按维度分组显示（exclusive→Popup，multiple→Toggle）。
         /// </summary>
         public static PropertyDefinition Tag(string key, string displayName,
             string? category = null, string? visibleWhen = null, int order = 0)
@@ -225,6 +231,68 @@ namespace SceneBlueprint.Core
                 DisplayName = displayName,
                 Type = PropertyType.Tag,
                 DefaultValue = "",
+                Category = category,
+                VisibleWhen = visibleWhen,
+                Order = order
+            };
+        }
+
+        /// <summary>
+        /// 创建信号标签选择器属性。Inspector 中显示为 Popup 下拉，选项来自 sbdef signal 声明。
+        /// </summary>
+        public static PropertyDefinition SignalTagSelector(string key, string displayName,
+            string defaultValue = "", string? category = null, string? tooltip = null,
+            string? visibleWhen = null, int order = 0)
+        {
+            return new PropertyDefinition
+            {
+                Key = key,
+                DisplayName = displayName,
+                Type = PropertyType.SignalTagSelector,
+                DefaultValue = defaultValue,
+                Tooltip = tooltip,
+                Category = category,
+                VisibleWhen = visibleWhen,
+                Order = order
+            };
+        }
+
+        /// <summary>
+        /// 创建实体引用选择器属性。Inspector 中显示为结构化面板（Mode + Role/Tag/Tags）。
+        /// <para>值以序列化字符串形式存储：<c>Mode:Value</c>，如 "ByRole:Boss"、"ByTag:CombatRole.Frontline"。</para>
+        /// </summary>
+        public static PropertyDefinition EntityRefSelector(string key, string displayName,
+            string defaultValue = "", string? category = null, string? tooltip = null,
+            string? visibleWhen = null, int order = 0)
+        {
+            return new PropertyDefinition
+            {
+                Key = key,
+                DisplayName = displayName,
+                Type = PropertyType.EntityRefSelector,
+                DefaultValue = defaultValue,
+                Tooltip = tooltip,
+                Category = category,
+                VisibleWhen = visibleWhen,
+                Order = order
+            };
+        }
+
+        /// <summary>
+        /// 创建条件参数编辑器属性。Inspector 中显示为键值对列表面板。
+        /// <para>值以分号分隔的键值对格式存储：<c>key=value;key=value</c>。</para>
+        /// </summary>
+        public static PropertyDefinition ConditionParams(string key, string displayName,
+            string defaultValue = "", string? category = null, string? tooltip = null,
+            string? visibleWhen = null, int order = 0)
+        {
+            return new PropertyDefinition
+            {
+                Key = key,
+                DisplayName = displayName,
+                Type = PropertyType.ConditionParams,
+                DefaultValue = defaultValue,
+                Tooltip = tooltip,
                 Category = category,
                 VisibleWhen = visibleWhen,
                 Order = order

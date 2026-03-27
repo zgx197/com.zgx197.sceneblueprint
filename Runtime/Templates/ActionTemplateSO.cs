@@ -1,6 +1,7 @@
 #nullable enable
 using System;
 using System.Collections.Generic;
+using SceneBlueprint.Core;
 using UnityEngine;
 
 namespace SceneBlueprint.Runtime.Templates
@@ -60,6 +61,10 @@ namespace SceneBlueprint.Runtime.Templates
             new PortEntry { Id = "out", DisplayName = "完成", PortType = PortTypeEntry.FlowOut }
         };
 
+        [Header("── 输出变量声明 ──")]
+        [Tooltip("节点会向黑板写入的变量声明，供下游 definition-first 消费")]
+        public List<OutputVariableEntry> OutputVariables = new();
+
         // ═══════════════════════════════════════════════════════════
         //  属性
         // ═══════════════════════════════════════════════════════════
@@ -72,7 +77,7 @@ namespace SceneBlueprint.Runtime.Templates
         // ═══════════════════════════════════════════════════════════
 
         [Header("── 场景需求 ──")]
-        [Tooltip("声明该 Action 需要什么类型的场景标记")]
+        [Tooltip("为 SceneBinding 属性补充 marker requirement 元数据；BindingKey 必须对应某个 SceneBinding 属性")]
         public List<SceneRequirementEntry> SceneRequirements = new();
 
         // ═══════════════════════════════════════════════════════════
@@ -111,13 +116,39 @@ namespace SceneBlueprint.Runtime.Templates
 
             [Tooltip("端口类型：FlowOut(单连接) / EventOut(多连接)")]
             public PortTypeEntry PortType = PortTypeEntry.FlowOut;
+
+            [Tooltip("端口在图结构中的正式语义角色")]
+            public PortGraphRole GraphRole = PortGraphRole.None;
+
+            [Tooltip("端口的人类可读摘要标签，留空时回退到显示名")]
+            public string SummaryLabel = "";
+
+            [Tooltip("建议最少连接数；主要给 Inspector / validator 提示使用")]
+            public int MinConnections;
+        }
+
+        [Serializable]
+        public class OutputVariableEntry
+        {
+            [Tooltip("变量名（运行时写入黑板时使用）")]
+            public string Name = "";
+
+            [Tooltip("显示名称")]
+            public string DisplayName = "";
+
+            [Tooltip("变量类型，如 Int / Float / Bool / String")]
+            public string Type = "String";
+
+            [Tooltip("作用域，如 Local / Global")]
+            public string Scope = "Global";
         }
 
         /// <summary>属性值类型（对应 Core.PropertyType 枚举）</summary>
         public enum PropertyTypeEntry
         {
             Float, Int, Bool, String, Enum, AssetRef,
-            Vector2, Vector3, Color, Tag, SceneBinding
+            Vector2, Vector3, Color, Tag, SceneBinding,
+            StructList, VariableSelector, SignalTagSelector, EntityRefSelector, ConditionParams
         }
 
         /// <summary>场景绑定类型（对应 Core.BindingType 枚举）</summary>
@@ -156,6 +187,9 @@ namespace SceneBlueprint.Runtime.Templates
             [Tooltip("枚举选项，逗号分隔，如 'Instant,Interval,Burst'")]
             public string EnumOptions = "";
 
+            [Tooltip("枚举显示文案，逗号分隔；长度与 EnumOptions 一致时优先显示这里")]
+            public string EnumDisplayOptions = "";
+
             [Header("── 场景绑定（SceneBinding） ──")]
             [Tooltip("场景绑定类型")]
             public BindingTypeEntry BindingType = BindingTypeEntry.Transform;
@@ -164,12 +198,35 @@ namespace SceneBlueprint.Runtime.Templates
             [Tooltip("资产类型过滤（完整类名，如 'MonsterGroupTemplate'）")]
             public string AssetFilterTypeName = "";
 
+            [Header("── 结构化列表（StructList） ──")]
+            [Tooltip("StructList 子字段定义；仅当类型为 StructList 时使用")]
+            public List<PropertyEntry> StructFields = new();
+
+            [Tooltip("StructList 摘要模板，如 '波次: {count} 波'")]
+            public string SummaryFormat = "";
+
+            [Header("── 动态类型（String） ──")]
+            [Tooltip("当本属性是 String 时，可指向一个 VariableSelector 属性 Key 以动态切换控件类型")]
+            public string TypeSourceKey = "";
+
             [Header("── UI 控制 ──")]
             [Tooltip("条件可见性表达式，如 'tempoType == Interval'")]
             public string VisibleWhen = "";
 
             [Tooltip("Inspector 分组名")]
             public string Category = "";
+
+            [Tooltip("definition-driven section 的稳定键")]
+            public string SectionKey = "";
+
+            [Tooltip("definition-driven section 的显示标题")]
+            public string SectionTitle = "";
+
+            [Tooltip("section 排序值")]
+            public int SectionOrder;
+
+            [Tooltip("是否属于高级属性，由框架统一放进高级折叠区")]
+            public bool IsAdvanced;
 
             [Tooltip("排列顺序（小值在前）")]
             public int Order;
@@ -182,7 +239,7 @@ namespace SceneBlueprint.Runtime.Templates
         [Serializable]
         public class SceneRequirementEntry
         {
-            [Tooltip("绑定键名（如 'spawnArea'）")]
+            [Tooltip("绑定键名（如 'spawnArea'），必须对应某个 SceneBinding 属性 Key")]
             public string BindingKey = "";
 
             [Tooltip("标记类型 ID（如 'Point', 'Area'）")]

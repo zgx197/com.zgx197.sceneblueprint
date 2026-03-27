@@ -112,5 +112,67 @@ namespace SceneBlueprint.Core.Generated
             public const string Out = "out";
         }
 
+        /// <summary>发射信号 (Signal.Emit)</summary>
+        public static class SignalEmit
+        {
+            // 端口 ID
+            public const string In  = "in";
+            public const string Out = "out";
+
+            // 属性 Key（类型化）
+            public static readonly PropertyKey<string> SignalTag      = new("signalTag");
+            public static readonly PropertyKey<string> SubjectRef     = new("subjectRef");
+            public static readonly PropertyKey<string> InstigatorRef  = new("instigatorRef");
+            public static readonly PropertyKey<string> TargetRef      = new("targetRef");
+        }
+
+        /// <summary>等待信号 (Signal.WaitSignal)</summary>
+        public static class SignalWaitSignal
+        {
+            // 端口 ID
+            public const string In        = "in";
+            public const string Out       = "out";
+            public const string OnTimeout = "onTimeout";
+
+            // 属性 Key（类型化）
+            public static readonly PropertyKey<string> SignalTag        = new("signalTag");
+            public static readonly PropertyKey<string> SubjectRefFilter = new("subjectRefFilter");
+            public static readonly PropertyKey<float>  Timeout          = new("timeout");
+        }
+
+        /// <summary>监听条件 (Signal.WatchCondition)</summary>
+        public static class SignalWatchCondition
+        {
+            // 端口 ID
+            public const string In          = "in";
+            public const string Out         = "out";
+            public const string OnTimeout   = "onTimeout";
+            public const string OnTriggered = "onTriggered";
+
+            // 属性 Key（类型化）
+            public static readonly PropertyKey<string> ConditionType = new("conditionType");
+            public static readonly PropertyKey<string> TargetRef     = new("targetRef");
+            public static readonly PropertyKey<string> Parameters    = new("parameters");
+            public static readonly PropertyKey<float>  Timeout       = new("timeout");
+            public static readonly PropertyKey<bool>   Repeat        = new("repeat");
+        }
+
+        /// <summary>组合条件 (Signal.CompositeCondition)</summary>
+        public static class SignalCompositeCondition
+        {
+            // 端口 ID
+            public const string In        = "in";
+            public const string Out       = "out";
+            public const string Cond0     = "cond0";
+            public const string Cond1     = "cond1";
+            public const string Cond2     = "cond2";
+            public const string Cond3     = "cond3";
+            public const string OnTimeout = "onTimeout";
+
+            // 属性 Key（类型化）
+            public static readonly PropertyKey<string> Mode    = new("mode");
+            public static readonly PropertyKey<float>  Timeout = new("timeout");
+        }
+
     }
 }

@@ -620,7 +620,7 @@ GameObject:
   - component: {fileID: 1182719187}
   - component: {fileID: 1182719186}
   m_Layer: 0
-  m_Name: '[BlueprintRuntimeManager]'
+  m_Name: '[BlueprintRuntimeDemoHost]'
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0

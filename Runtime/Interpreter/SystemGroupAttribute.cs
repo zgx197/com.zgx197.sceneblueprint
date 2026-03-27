@@ -11,11 +11,13 @@ namespace SceneBlueprint.Runtime.Interpreter
     /// </summary>
     public enum SystemGroup
     {
+        /// <summary>转场级：TransitionSystem（消费 PendingEvents，激活下游节点，最先执行）</summary>
+        Transition  = -100,
         /// <summary>框架级：FlowSystem、BlackboardSystem、FlowFilterSystem</summary>
         Framework   = 0,
         /// <summary>业务级：SpawnSystem、TriggerSystem、VFX 等</summary>
         Business    = 100,
-        /// <summary>后处理：TransitionSystem（需在所有业务 System 之后执行）</summary>
+        /// <summary>后处理：需在所有业务 System 之后执行</summary>
         PostProcess = 900,
     }
 

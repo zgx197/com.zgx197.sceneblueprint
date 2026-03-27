@@ -46,14 +46,21 @@ namespace SceneBlueprint.Core
         Vector3,
         /// <summary>颜色 → ColorField</summary>
         Color,
-        /// <summary>标签 → Tag 选择器（Phase 5 实现）</summary>
+        /// <summary>实体标签 → Tag 维度选择器（按维度分组：exclusive=Popup 单选，multiple=Toggle 多选）</summary>
         Tag,
         /// <summary>场景绑定 → 场景对象拖拽框（如刷怪区域、Boss 出场点）</summary>
         SceneBinding,
         /// <summary>结构化列表 → Inspector 中显示为 ReorderableList，每个元素包含多个子字段</summary>
         StructList,
         /// <summary>Blackboard 变量选择器 → Popup 下拉，选项来自当前蓝图的变量声明列表</summary>
-        VariableSelector
+        VariableSelector,
+
+        /// <summary>信号标签选择器 → Popup 下拉，选项来自 sbdef signal 声明的信号路径列表</summary>
+        SignalTagSelector,
+        /// <summary>实体引用选择器 → 结构化面板（Mode 选择 + Role/Tag/Tags 输入）</summary>
+        EntityRefSelector,
+        /// <summary>条件参数编辑器 → 键值对列表面板（key=value 分号分隔，支持动态增删）</summary>
+        ConditionParams
     }
 
     /// <summary>
@@ -123,6 +130,36 @@ namespace SceneBlueprint.Core
         public string? Category { get; set; }
 
         /// <summary>
+        /// Inspector section 的稳定键。
+        /// <para>
+        /// 用于把属性正式归入“基础 / 条件 / 上下文 / 场景绑定 / 高级”等定义驱动布局段。
+        /// 为空时，Inspector 会回退到 Category 或通用默认 section。
+        /// </para>
+        /// </summary>
+        public string? SectionKey { get; set; }
+
+        /// <summary>
+        /// Inspector section 的显示标题。
+        /// <para>为空时，Inspector 会回退到 Category 或按 SectionKey 自动生成标题。</para>
+        /// </summary>
+        public string? SectionTitle { get; set; }
+
+        /// <summary>
+        /// Inspector section 的排序值。
+        /// <para>值越小越靠前；未设置时回退到 0，SceneBinding 默认使用靠后的保留排序。</para>
+        /// </summary>
+        public int SectionOrder { get; set; }
+
+        /// <summary>
+        /// 是否属于高级属性。
+        /// <para>
+        /// 高级属性不会再要求 override 自己做折叠逻辑，而是由框架层统一放进
+        /// “高级 Advanced” 折叠区。
+        /// </para>
+        /// </summary>
+        public bool IsAdvanced { get; set; }
+
+        /// <summary>
         /// 排列顺序——小值在前，控制属性在 Inspector 中的上下顺序
         /// </summary>
         public int Order { get; set; }
@@ -142,6 +179,15 @@ namespace SceneBlueprint.Core
         public string[]? EnumOptions { get; set; }
 
         /// <summary>
+        /// 枚举选项的人类可读显示文案（可选）。
+        /// <para>
+        /// 长度与 <see cref="EnumOptions"/> 一致时，Inspector 优先显示这里的文案；
+        /// 否则回退到默认的双语化格式。
+        /// </para>
+        /// </summary>
+        public string[]? EnumDisplayOptions { get; set; }
+
+        /// <summary>
         /// 资产引用的类型过滤全名（仅 AssetRef 类型时有效）。
         /// <para>如 "MonsterGroupTemplate"，限制 ObjectField 只能选择指定类型的资产。</para>
         /// </summary>
@@ -152,6 +198,16 @@ namespace SceneBlueprint.Core
         /// <para>决定导出时的数据格式：Transform 导出坐标，Area 导出顶点数组。</para>
         /// </summary>
         public BindingType? SceneBindingType { get; set; }
+
+        /// <summary>
+        /// 场景绑定需求（仅 SceneBinding 类型有效）。
+        /// <para>
+        /// 当 Type == PropertyType.SceneBinding 时，此字段持有完整的绑定约束声明，
+        /// Inspector 绘制器和验证器统一从此处读取约束信息。
+        /// 为 null 时按无约束处理（向后兼容手写 ActionDef 的情况）。
+        /// </para>
+        /// </summary>
+        public MarkerRequirement? BindingRequirement { get; set; }
 
         // ─── 条件可见性 ───
 
@@ -214,5 +270,56 @@ namespace SceneBlueprint.Core
         /// </para>
         /// </summary>
         public string? TypeSourceKey { get; set; }
+
+        /// <summary>
+        /// 属性级 authoring 规则挂点。
+        /// 用于把规范化和字段级校验正式挂回定义层，而不是继续散在 override / compiler / runtime fallback 中。
+        /// </summary>
+        public IPropertyAuthoringRule? AuthoringRule { get; set; }
+
+        /// <summary>
+        /// 为属性声明正式的 Inspector section。
+        /// 用于把 Inspector 逐步收回到“定义驱动布局 + override 只做高级交互”。
+        /// </summary>
+        public PropertyDefinition InSection(
+            string sectionKey,
+            string sectionTitle,
+            int sectionOrder = 0,
+            bool isAdvanced = false)
+        {
+            SectionKey = sectionKey ?? string.Empty;
+            SectionTitle = sectionTitle ?? string.Empty;
+            SectionOrder = sectionOrder;
+            IsAdvanced = isAdvanced;
+            return this;
+        }
+
+        /// <summary>
+        /// 标记属性为高级项，由框架层统一放入高级折叠区。
+        /// </summary>
+        public PropertyDefinition Advanced(bool isAdvanced = true)
+        {
+            IsAdvanced = isAdvanced;
+            return this;
+        }
+
+        /// <summary>
+        /// 为属性补充 tooltip。
+        /// 用于把少量原本散在 override 或手写 def 里的提示文案收回 definition 层。
+        /// </summary>
+        public PropertyDefinition WithTooltip(string? tooltip)
+        {
+            Tooltip = tooltip;
+            return this;
+        }
+
+        /// <summary>
+        /// 为枚举属性声明正式显示文案。
+        /// </summary>
+        public PropertyDefinition WithEnumDisplayOptions(string[]? displayOptions)
+        {
+            EnumDisplayOptions = displayOptions;
+            return this;
+        }
     }
 }

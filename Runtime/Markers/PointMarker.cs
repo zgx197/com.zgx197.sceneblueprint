@@ -22,5 +22,31 @@ namespace SceneBlueprint.Runtime.Markers
 
         [Tooltip("是否显示方向箭头")]
         public bool ShowDirection = true;
+
+        // ── 快照序列化 ──
+
+        public override string SerializeShapeData()
+        {
+            return JsonUtility.ToJson(new PointShapeData
+            {
+                gizmoRadius = GizmoRadius,
+                showDirection = ShowDirection
+            });
+        }
+
+        public override void DeserializeShapeData(string json)
+        {
+            if (string.IsNullOrEmpty(json) || json == "{}") return;
+            var data = JsonUtility.FromJson<PointShapeData>(json);
+            GizmoRadius = data.gizmoRadius;
+            ShowDirection = data.showDirection;
+        }
+
+        [System.Serializable]
+        private struct PointShapeData
+        {
+            public float gizmoRadius;
+            public bool showDirection;
+        }
     }
 }

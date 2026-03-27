@@ -1,6 +1,7 @@
 #nullable enable
 using System.Collections.Generic;
 using UnityEngine;
+using SceneBlueprint.Runtime.Snapshot;
 
 namespace SceneBlueprint.Runtime.Markers.Annotations
 {
@@ -50,6 +51,17 @@ namespace SceneBlueprint.Runtime.Markers.Annotations
             data["transitionDuration"] = TransitionDuration;
             data["easing"] = Easing.ToString();
             data["lockRotation"] = LockRotation;
+        }
+
+        /// <summary>
+        /// 从导出数据恢复摄像机配置 — CollectExportData 的逆操作。
+        /// </summary>
+        public override void RestoreFromExportData(IDictionary<string, object> data)
+        {
+            if (data.TryGetValue("fov", out var v0)) FOV = SnapshotDataHelper.ToFloat(v0);
+            if (data.TryGetValue("transitionDuration", out var v1)) TransitionDuration = SnapshotDataHelper.ToFloat(v1);
+            if (data.TryGetValue("easing", out var v2)) Easing = SnapshotDataHelper.ToEnum<CameraEasing>(v2);
+            if (data.TryGetValue("lockRotation", out var v3)) LockRotation = SnapshotDataHelper.ToBool(v3);
         }
 
         // ── Gizmo 装饰 ──

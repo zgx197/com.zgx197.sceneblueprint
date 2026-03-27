@@ -221,34 +221,7 @@ namespace SceneBlueprint.Adapters.Unity3D
                 case BindingType.Area:
                     var area = go.GetComponent<AreaMarker>();
                     if (area != null)
-                    {
-                        if (area.Shape == AreaShape.Box)
-                        {
-                            return JsonUtility.ToJson(new AreaBoxPayload
-                            {
-                                shape = "Box",
-                                position = t.position,
-                                rotation = t.rotation.eulerAngles,
-                                boxSize = area.BoxSize,
-                                height = area.Height
-                            });
-                        }
-                        else
-                        {
-                            var worldVerts = area.GetWorldVertices();
-                            var verts = new Vector3[worldVerts.Count];
-                            for (int i = 0; i < worldVerts.Count; i++)
-                                verts[i] = worldVerts[i];
-                            return JsonUtility.ToJson(new AreaPolygonPayload
-                            {
-                                shape = "Polygon",
-                                position = t.position,
-                                rotation = t.rotation.eulerAngles,
-                                vertices = verts,
-                                height = area.Height
-                            });
-                        }
-                    }
+                        return BuildAreaPayload(area);
                     break;
 
                 case BindingType.Transform:
@@ -261,6 +234,71 @@ namespace SceneBlueprint.Adapters.Unity3D
             }
 
             return "{}";
+        }
+
+        /// <summary>
+        /// 根据 AreaMarker 形状构建对应的导出 Payload。
+        /// Box/Polygon → type="Polygon"（世界坐标底面顶点 + 高度）
+        /// Circle     → type="Circle"（圆心 + 半径 + 高度）
+        /// Capsule    → type="Capsule"（两端点 + 半径 + 高度）
+        /// </summary>
+        private static string BuildAreaPayload(AreaMarker area)
+        {
+            switch (area.Shape)
+            {
+                case AreaShape.Circle:
+                    return JsonUtility.ToJson(new AreaCirclePayload
+                    {
+                        type = "Circle",
+                        center = area.transform.position,
+                        radius = area.Radius,
+                        height = area.Height
+                    });
+
+                case AreaShape.Capsule:
+                {
+                    var (pA, pB) = area.GetCapsuleWorldPoints();
+                    return JsonUtility.ToJson(new AreaCapsulePayload
+                    {
+                        type = "Capsule",
+                        pointA = pA,
+                        pointB = pB,
+                        radius = area.CapsuleRadius,
+                        height = area.Height
+                    });
+                }
+
+                default: // Box 和 Polygon 统一走 Polygon 路径
+                {
+                    // GenerateFloorVerticesCW 为 Box 生成 4 顶点、Polygon 返回原始顶点（均为局部坐标）
+                    var localVerts = area.GenerateFloorVerticesCW();
+                    var verts = area.FloorVerticesToWorld(localVerts);
+                    // 确保俯视顺时针绕序
+                    EnsureClockwiseXZ(verts);
+                    return JsonUtility.ToJson(new AreaPolygonPayload
+                    {
+                        type = "Polygon",
+                        floorVertices = verts,
+                        height = area.Height
+                    });
+                }
+            }
+        }
+
+        /// <summary>确保顶点数组为俯视 XZ 平面顺时针绕序（叉积符号判断）</summary>
+        private static void EnsureClockwiseXZ(Vector3[] verts)
+        {
+            if (verts.Length < 3) return;
+            float sum = 0;
+            for (int i = 0; i < verts.Length; i++)
+            {
+                var a = verts[i];
+                var b = verts[(i + 1) % verts.Length];
+                sum += (b.x - a.x) * (b.z + a.z);
+            }
+            // sum > 0 表示俯视顺时针，sum < 0 表示逆时针，需要翻转
+            if (sum < 0)
+                System.Array.Reverse(verts);
         }
 
         private static GameObject? AsGameObject(object sceneObject)
@@ -281,22 +319,29 @@ namespace SceneBlueprint.Adapters.Unity3D
         }
 
         [System.Serializable]
-        private struct AreaBoxPayload
+        private struct AreaPolygonPayload
         {
-            public string shape;
-            public Vector3 position;
-            public Vector3 rotation;
-            public Vector3 boxSize;
+            public string type;
+            public Vector3[] floorVertices;
             public float height;
         }
 
         [System.Serializable]
-        private struct AreaPolygonPayload
+        private struct AreaCirclePayload
         {
-            public string shape;
-            public Vector3 position;
-            public Vector3 rotation;
-            public Vector3[] vertices;
+            public string type;
+            public Vector3 center;
+            public float radius;
+            public float height;
+        }
+
+        [System.Serializable]
+        private struct AreaCapsulePayload
+        {
+            public string type;
+            public Vector3 pointA;
+            public Vector3 pointB;
+            public float radius;
             public float height;
         }
 

@@ -90,6 +90,7 @@ namespace SceneBlueprint.Runtime.Interpreter
                 BlueprintName = data.BlueprintName ?? "",
                 Actions = data.Actions,
                 Transitions = data.Transitions ?? Array.Empty<TransitionEntry>(),
+                Metadata = SceneBlueprintTransportMetadataUtility.Read(data),
             };
 
             Debug.Log($"[BlueprintLoader.BuildFrame] Frame 创建完成，Actions={frame.Actions.Length}, Transitions={frame.Transitions.Length}");
@@ -153,6 +154,24 @@ namespace SceneBlueprint.Runtime.Interpreter
             }
             frame.OutgoingTransitions = outgoing;
             Debug.Log($"[BlueprintLoader.BuildFrame] 出边索引构建完成，共 {outgoing.Count} 个节点有出边");
+
+            // ── 3b. 构建入边索引（ActionIndex → 指向该 Action 的 Transition 索引列表）──
+            var incoming = new Dictionary<int, List<int>>();
+            for (int i = 0; i < frame.Transitions.Length; i++)
+            {
+                var t = frame.Transitions[i];
+                if (idToIndex.TryGetValue(t.ToActionId, out var toIdx))
+                {
+                    if (!incoming.TryGetValue(toIdx, out var list))
+                    {
+                        list = new List<int>();
+                        incoming[toIdx] = list;
+                    }
+                    list.Add(i);
+                }
+            }
+            frame.IncomingTransitions = incoming;
+            Debug.Log($"[BlueprintLoader.BuildFrame] 入边索引构建完成，共 {incoming.Count} 个节点有入边");
 
             // ── 4. 初始化运行时状态数组（全部 Idle）──
             var states = new ActionRuntimeState[data.Actions.Length];

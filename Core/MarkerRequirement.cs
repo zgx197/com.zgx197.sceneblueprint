@@ -60,6 +60,19 @@ namespace SceneBlueprint.Core
         /// <summary>默认 Tag（创建标记时的默认分类标签）</summary>
         public string DefaultTag { get; set; } = "";
 
+        /// <summary>
+        /// 独占绑定——为 true 时，绑定此 Marker 的节点独占它，
+        /// 其他节点不允许绑定同一个 Marker。
+        /// </summary>
+        public bool Exclusive { get; set; }
+
+        /// <summary>
+        /// 必需的 Annotation 类型 ID 列表——绑定的 Marker GO 上必须挂有这些 Annotation。
+        /// 为 null 或空数组表示无 Annotation 要求。
+        /// 值对应 MarkerAnnotation.AnnotationTypeId。
+        /// </summary>
+        public string[]? RequiredAnnotations { get; set; }
+
         /// <summary>无参构造函数（序列化需要）</summary>
         public MarkerRequirement() { }
 
@@ -67,6 +80,8 @@ namespace SceneBlueprint.Core
             string bindingKey,
             string markerTypeId,
             bool required = false,
+            bool exclusive = false,
+            string[]? requiredAnnotations = null,
             bool allowMultiple = false,
             int minCount = 0,
             string displayName = "",
@@ -75,6 +90,8 @@ namespace SceneBlueprint.Core
             BindingKey = bindingKey;
             MarkerTypeId = markerTypeId;
             Required = required;
+            Exclusive = exclusive;
+            RequiredAnnotations = requiredAnnotations;
             AllowMultiple = allowMultiple;
             MinCount = minCount;
             DisplayName = displayName;

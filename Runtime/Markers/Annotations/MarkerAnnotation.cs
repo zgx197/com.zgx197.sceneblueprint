@@ -35,6 +35,17 @@ namespace SceneBlueprint.Runtime.Markers.Annotations
         public abstract void CollectExportData(IDictionary<string, object> data);
 
         /// <summary>
+        /// 从导出数据恢复标注属性 — <see cref="CollectExportData"/> 的逆操作。
+        /// <para>
+        /// 由快照恢复器调用，将快照中的 key-value 数据写回组件字段。
+        /// sbdef codegen 为每个 Annotation 自动生成此方法的实现。
+        /// 内置 Annotation（如 CameraAnnotation）需手动实现。
+        /// </para>
+        /// </summary>
+        /// <param name="data">与 CollectExportData 输出格式相同的 key-value 字典</param>
+        public abstract void RestoreFromExportData(IDictionary<string, object> data);
+
+        /// <summary>
         /// 获取所在的 SceneMarker（缓存，避免重复 GetComponent）。
         /// </summary>
         public SceneMarker Marker => _marker != null ? _marker : (_marker = GetComponent<SceneMarker>());

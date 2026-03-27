@@ -29,6 +29,14 @@ namespace SceneBlueprint.Core
             public const string Set = "Blackboard.Set";
         }
 
+        public static class Signal
+        {
+            public const string Emit                = "Signal.Emit";
+            public const string WaitSignal          = "Signal.WaitSignal";
+            public const string WatchCondition      = "Signal.WatchCondition";
+            public const string CompositeCondition  = "Signal.CompositeCondition";
+        }
+
         // Spawn.*、Trigger.*、Vfx.* 已迁移至 SceneBlueprintUser/Definitions/*.sbdef，
         // 由 SbdefCodeGen 自动生成到 SceneBlueprintUser/Generated/UAT.*.g.cs。
     }

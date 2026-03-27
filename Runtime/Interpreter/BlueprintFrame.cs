@@ -24,6 +24,19 @@ namespace SceneBlueprint.Runtime.Interpreter
     public class BlueprintFrame
     {
         // ══════════════════════════════════════════
+        //  反向引用
+        // ══════════════════════════════════════════
+
+        /// <summary>
+        /// 所属 BlueprintRunner 的反向引用。
+        /// <para>
+        /// 允许 System 通过 frame.Runner 访问 ServiceLocator 等运行器功能。
+        /// 由 BlueprintRunner.Load() 设置。
+        /// </para>
+        /// </summary>
+        public BlueprintRunner? Runner { get; internal set; }
+
+        // ══════════════════════════════════════════
         //  静态数据（由 BlueprintLoader 初始化，运行时不变）
         // ══════════════════════════════════════════
 
@@ -48,6 +61,23 @@ namespace SceneBlueprint.Runtime.Interpreter
         /// </summary>
         public TransitionEntry[] Transitions { get; internal set; } = Array.Empty<TransitionEntry>();
 
+        /// <summary>
+        /// 顶层 transport metadata 运输壳。
+        /// <para>
+        /// 由导出期的 IExportEnricher 写入，用于承载编译计划、统计信息等
+        /// 不适合直接塞进某个节点 Properties 的补充产物。
+        /// </para>
+        /// </summary>
+        public PropertyValue[] Metadata { get; internal set; } = Array.Empty<PropertyValue>();
+
+        /// <summary>
+        /// transport metadata 默认消费入口。
+        /// <para>
+        /// 运行时默认应优先将顶层 Metadata 视为 transport envelope 来读取。
+        /// </para>
+        /// </summary>
+        public PropertyValue[] TransportMetadata => Metadata ?? Array.Empty<PropertyValue>();
+
         // ── 索引表（加速查询）──
 
         /// <summary>ActionId → ActionIndex 快速查找</summary>
@@ -58,6 +88,12 @@ namespace SceneBlueprint.Runtime.Interpreter
         /// TransitionSystem 用于快速查找"某个 Action 完成后应该触发哪些下游"。
         /// </summary>
         public Dictionary<int, List<int>> OutgoingTransitions { get; internal set; } = new();
+
+        /// <summary>
+        /// 入边索引：ActionIndex → 指向该 Action 的 Transition 索引列表。
+        /// CompositeConditionSystem 等需要扫描入边连线的 System 使用。
+        /// </summary>
+        public Dictionary<int, List<int>> IncomingTransitions { get; internal set; } = new();
 
         /// <summary>
         /// TypeId → ActionIndex 列表。
@@ -191,6 +227,28 @@ namespace SceneBlueprint.Runtime.Interpreter
                 ? Actions[actionIndex].SceneBindings
                 : Array.Empty<SceneBindingEntry>();
 
+        /// <summary>读取 transport metadata 运输壳中的原始字符串值。</summary>
+        public string GetTransportMetadata(string key)
+        {
+            if (string.IsNullOrEmpty(key))
+            {
+                return string.Empty;
+            }
+
+            return SceneBlueprintTransportMetadataUtility.GetValue(TransportMetadata, key);
+        }
+
+        /// <summary>
+        /// 兼容入口。
+        /// <para>
+        /// 默认新代码应优先使用 <see cref="GetTransportMetadata"/>。
+        /// </para>
+        /// </summary>
+        public string GetMetadata(string key)
+        {
+            return GetTransportMetadata(key);
+        }
+
         /// <summary>获取指定 TypeId 的所有 ActionIndex</summary>
         public List<int> GetActionIndices(string typeId)
             => ActionsByTypeId.TryGetValue(typeId, out var list) ? list : _emptyList;
@@ -198,6 +256,10 @@ namespace SceneBlueprint.Runtime.Interpreter
         /// <summary>获取某个 Action 的所有出边 Transition 索引</summary>
         public List<int> GetOutgoingTransitionIndices(int actionIndex)
             => OutgoingTransitions.TryGetValue(actionIndex, out var list) ? list : _emptyList;
+
+        /// <summary>获取某个 Action 的所有入边 Transition 索引</summary>
+        public List<int> GetIncomingTransitionIndices(int actionIndex)
+            => IncomingTransitions.TryGetValue(actionIndex, out var list) ? list : _emptyList;
 
         /// <summary>检查是否有任何 Action 处于活跃状态（Running 或 WaitingTrigger）。
         /// Listening 状态属于被动观察节点（如 Flow.Filter），不阻塞主流程完成。</summary>
@@ -218,8 +280,50 @@ namespace SceneBlueprint.Runtime.Interpreter
         /// <summary>发射端口事件（Action 完成后，通知 TransitionSystem 路由至下游）</summary>
         public void EmitPortEvent(int fromIndex, string fromPortId, int toIndex, string toPortId)
         {
-            PendingEvents.Add(new PortEvent(fromIndex, fromPortId, toIndex, toPortId));
+            var ev = new PortEvent(fromIndex, fromPortId.GetHashCode(), toIndex, toPortId.GetHashCode());
+#if UNITY_EDITOR || DEBUG
+            ev.DebugFromPortId = fromPortId;
+            ev.DebugToPortId = toPortId;
+#endif
+            PendingEvents.Add(ev);
         }
+
+        /// <summary>
+        /// 发射指定 flow 端口的转场事件到 PendingEvents，并标记 EventEmitted。
+        /// <para>
+        /// 设计原则（"谁 Complete，谁 Emit"）：
+        /// System 在设置 Completed 前必须调用此方法声明走哪个端口。
+        /// TransitionSystem 不再自动扫描 Completed 节点生成 out 事件。
+        /// </para>
+        /// </summary>
+        public void EmitFlowEvent(int actionIndex, string portId)
+        {
+            var transitionIndices = GetOutgoingTransitionIndices(actionIndex);
+            int fromHash = portId.GetHashCode();
+            for (int t = 0; t < transitionIndices.Count; t++)
+            {
+                var transition = Transitions[transitionIndices[t]];
+                if (transition.FromPortId == portId)
+                {
+                    var toIndex = GetActionIndex(transition.ToActionId);
+                    if (toIndex >= 0)
+                    {
+                        int toHash = transition.ToPortId.GetHashCode();
+                        var ev = new PortEvent(actionIndex, fromHash, toIndex, toHash);
+#if UNITY_EDITOR || DEBUG
+                        ev.DebugFromPortId = portId;
+                        ev.DebugToPortId = transition.ToPortId;
+#endif
+                        PendingEvents.Add(ev);
+                    }
+                }
+            }
+            States[actionIndex].EventEmitted = true;
+        }
+
+        /// <summary>发射 "out" 端口事件（节点正常完成时的便捷方法）</summary>
+        public void EmitOutEvent(int actionIndex)
+            => EmitFlowEvent(actionIndex, "out");
 
         /// <summary>清空事件队列（每轮 Tick 由 Runner 在消费完毕后调用）</summary>
         public void ClearEvents() => PendingEvents.Clear();

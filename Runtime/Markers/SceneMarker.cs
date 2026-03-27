@@ -87,6 +87,48 @@ namespace SceneBlueprint.Runtime.Markers
             return dotIndex > 0 ? Tag.Substring(0, dotIndex) : Tag;
         }
 
+        // ── 快照序列化（子类 override 以持久化特有的几何数据）──
+
+        /// <summary>
+        /// 将 Marker 特有的空间/几何数据序列化为 JSON 字符串。
+        /// <para>
+        /// 基类默认返回 "{}"，子类（如 AreaMarker、PointMarker）override
+        /// 以序列化各自的特有字段（BoxSize/Vertices/Shape/Height 等）。
+        /// 由 <see cref="Runtime.Snapshot.BindingSnapshot"/> 拍快照时调用。
+        /// </para>
+        /// </summary>
+        public virtual string SerializeShapeData() => "{}";
+
+        /// <summary>
+        /// 从 JSON 字符串恢复 Marker 特有的空间/几何数据。
+        /// <para>
+        /// 基类默认不做任何事，子类 override 以反序列化各自的特有字段。
+        /// 由快照恢复器在重建 Marker 后调用。
+        /// </para>
+        /// </summary>
+        /// <param name="json">SerializeShapeData 输出的 JSON 字符串</param>
+        public virtual void DeserializeShapeData(string json) { }
+
+        // ── 几何版本号（用于 IAreaShape 缓存失效） ──
+
+        /// <summary>
+        /// 几何数据版本号——每次形状参数变化时单调递增。
+        /// <para>
+        /// 消费方（如 AreaMarker.GetShape()）缓存上次构建时的版本号，
+        /// 若当前版本号不同则重新构建几何对象。
+        /// </para>
+        /// </summary>
+        public uint GeometryVersion { get; private set; }
+
+        /// <summary>
+        /// 递增几何版本号，通知依赖方几何数据已变化。
+        /// <para>由子类在修改形状参数后调用（OnValidate、Handle 编辑、反序列化后）。</para>
+        /// </summary>
+        protected void IncrementGeometryVersion()
+        {
+            GeometryVersion++;
+        }
+
         /// <summary>自动生成 MarkerId（如果尚未设置）</summary>
         protected virtual void Reset()
         {

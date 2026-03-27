@@ -38,6 +38,13 @@ namespace SceneBlueprint.Contract
         public TransitionEntry[] Transitions = Array.Empty<TransitionEntry>();
         public VariableDeclaration[] Variables = Array.Empty<VariableDeclaration>();
         public DataConnectionEntry[] DataConnections = Array.Empty<DataConnectionEntry>();
+
+        // ── 顶层 transport metadata 运输壳（由 IExportEnricher 在导出后处理阶段写入）──
+        // 继续保留为序列化字段，默认读写建议通过 SceneBlueprintTransportMetadataUtility。
+        public PropertyValue[] Metadata = Array.Empty<PropertyValue>();
+
+        // ── 节点类型描述（TypeId → 显示名/分类/端口名，供调试窗口使用）──
+        public ActionTypeInfo[] ActionTypeInfos = Array.Empty<ActionTypeInfo>();
     }
 
     /// <summary>
@@ -165,5 +172,32 @@ namespace SceneBlueprint.Contract
         public string Type         = "Int";
         public string Scope        = "Local";
         public string InitialValue = "";
+    }
+
+    /// <summary>
+    /// 节点类型描述信息——供调试窗口显示中文名、分类、端口名等。
+    /// 每种出现过的 TypeId 导出一份，不随节点数量重复。
+    /// </summary>
+    [Serializable]
+    public class ActionTypeInfo
+    {
+        /// <summary>类型 ID（如 "Spawn.Wave"）</summary>
+        public string TypeId = "";
+        /// <summary>中文显示名（如 "波次刷怪"）</summary>
+        public string DisplayName = "";
+        /// <summary>分类显示名（如 "刷怪"）</summary>
+        public string Category = "";
+        /// <summary>端口信息列表</summary>
+        public ActionPortInfo[] Ports = Array.Empty<ActionPortInfo>();
+    }
+
+    /// <summary>端口描述信息</summary>
+    [Serializable]
+    public class ActionPortInfo
+    {
+        /// <summary>端口 ID（如 "out", "onWaveStart"）</summary>
+        public string Id = "";
+        /// <summary>端口显示名（如 "完成", "波次开始"）</summary>
+        public string DisplayName = "";
     }
 }

@@ -1,6 +1,7 @@
 #nullable enable
 using System;
 using System.Collections.Generic;
+using SceneBlueprint.Contract;
 
 namespace SceneBlueprint.Runtime.Interpreter.Diagnostics
 {

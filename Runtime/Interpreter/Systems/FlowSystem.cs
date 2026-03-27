@@ -1,129 +1,281 @@
 #nullable enable
 using UnityEngine;
+using SceneBlueprint.Contract;
 using SceneBlueprint.Core;
 using SceneBlueprint.Core.Generated;
+using SceneBlueprint.Runtime.State;
 
 namespace SceneBlueprint.Runtime.Interpreter.Systems
 {
+    public sealed class BranchNodeState : IGraphTimedNodeState
+    {
+        public int StartTick { get; set; }
+
+        public string PlanSource { get; set; } = string.Empty;
+
+        public string PlanSummary { get; set; } = string.Empty;
+
+        public bool ConditionResult { get; set; }
+
+        public string ConditionSummary { get; set; } = string.Empty;
+
+        public string ExecutionSummary { get; set; } = string.Empty;
+
+        public string RoutedPort { get; set; } = string.Empty;
+
+        public int GetElapsedTicks(int currentTick)
+        {
+            return Mathf.Max(0, currentTick - StartTick);
+        }
+    }
+
     /// <summary>
-    /// 流程控制系统——处理 Flow.Start / Flow.End / Flow.Branch / Flow.Delay 等流程节点。
-    /// <para>
-    /// Phase 1 实现：
-    /// - Flow.Start：进入 Running 后立即 Completed（由 Runner 在 Load 时设为 Running）
-    /// - Flow.End：进入 Running 后标记蓝图完成
-    /// </para>
-    /// <para>
-    /// Phase 2+ 扩展：
-    /// - Flow.Branch：根据条件选择输出端口
-    /// - Flow.Delay：等待指定 Tick 数后 Complete
-    /// - Flow.Join：等待所有输入端口都被触发后 Complete
-    /// </para>
+    /// 流程控制系统——处理 Flow.Start / Flow.End / Flow.Delay / Flow.Join 等流程节点。
     /// </summary>
     [UpdateInGroup(SystemGroup.Framework)]
-    public class FlowSystem : BlueprintSystemBase
+    public class FlowSystem : BlueprintSystemBase, IFrameAware
     {
+        private const string FlowEndCompletionEventValue = "blueprint.complete";
+
+        internal static readonly NodeStateDescriptor<InstantEventNodeState> StartStateDescriptor =
+            new(
+                "flow.start.state",
+                StateLifetime.Execution,
+                static () => new InstantEventNodeState(),
+                debugName: "Flow.Start State");
+
+        internal static readonly NodeStateDescriptor<InstantEventNodeState> EndStateDescriptor =
+            new(
+                "flow.end.state",
+                StateLifetime.Execution,
+                static () => new InstantEventNodeState(),
+                debugName: "Flow.End State");
+
+        internal static readonly NodeStateDescriptor<TimedNodeState> DelayStateDescriptor =
+            new(
+                "flow.delay.state",
+                StateLifetime.Execution,
+                static () => new TimedNodeState(),
+                debugName: "Flow.Delay State");
+
+        internal static readonly NodeStateDescriptor<BranchNodeState> BranchStateDescriptor =
+            new(
+                "flow.branch.state",
+                StateLifetime.Execution,
+                static () => new BranchNodeState(),
+                debugName: "Flow.Branch State");
+
+        internal static readonly NodeStateDescriptor<JoinNodeState> JoinStateDescriptor =
+            new(
+                "flow.join.state",
+                StateLifetime.Execution,
+                static () => new JoinNodeState(),
+                debugName: "Flow.Join State");
+
+        private bool _startLifecycleBindingRegistered;
+        private bool _endLifecycleBindingRegistered;
+        private bool _delayLifecycleBindingRegistered;
+        private bool _branchLifecycleBindingRegistered;
+        private bool _joinLifecycleBindingRegistered;
+
         public override string Name => "FlowSystem";
 
-        public override void Update(BlueprintFrame frame)
+        public BlueprintFrame? Frame { get; set; }
+
+        public override void OnInit(BlueprintFrame frame)
         {
-            ProcessFlowStart(frame);
-            ProcessFlowEnd(frame);
-            ProcessFlowDelay(frame);
-            ProcessFlowJoin(frame);
+            _startLifecycleBindingRegistered = false;
+            _endLifecycleBindingRegistered = false;
+            _delayLifecycleBindingRegistered = false;
+            _branchLifecycleBindingRegistered = false;
+            _joinLifecycleBindingRegistered = false;
+            NodePrivateExecutionStateSupport.EnsureLifecycleBinding(frame, StartStateDescriptor, ref _startLifecycleBindingRegistered);
+            NodePrivateExecutionStateSupport.EnsureLifecycleBinding(frame, EndStateDescriptor, ref _endLifecycleBindingRegistered);
+            NodePrivateExecutionStateSupport.EnsureLifecycleBinding(frame, DelayStateDescriptor, ref _delayLifecycleBindingRegistered);
+            NodePrivateExecutionStateSupport.EnsureLifecycleBinding(frame, BranchStateDescriptor, ref _branchLifecycleBindingRegistered);
+            NodePrivateExecutionStateSupport.EnsureLifecycleBinding(frame, JoinStateDescriptor, ref _joinLifecycleBindingRegistered);
         }
 
-        /// <summary>处理 Flow.Start：Running → 立即 Completed</summary>
-        private void ProcessFlowStart(BlueprintFrame frame)
+        public override void OnDisabled(BlueprintFrame frame)
         {
             var indices = frame.GetActionIndices(AT.Flow.Start);
-            for (int i = 0; i < indices.Count; i++)
+            for (var index = 0; index < indices.Count; index++)
             {
-                var idx = indices[i];
-                ref var state = ref frame.States[idx];
+                NodePrivateExecutionStateSupport.DisposeExecutionState(frame, indices[index], StartStateDescriptor);
+            }
 
-                if (state.Phase == ActionPhase.Running)
-                {
-                    state.Phase = ActionPhase.Completed;
-                    Debug.Log($"[FlowSystem] {AT.Flow.Start} (index={idx}) → Completed");
-                }
+            indices = frame.GetActionIndices(AT.Flow.End);
+            for (var index = 0; index < indices.Count; index++)
+            {
+                NodePrivateExecutionStateSupport.DisposeExecutionState(frame, indices[index], EndStateDescriptor);
+            }
+
+            indices = frame.GetActionIndices(AT.Flow.Delay);
+            for (var index = 0; index < indices.Count; index++)
+            {
+                NodePrivateExecutionStateSupport.DisposeExecutionState(frame, indices[index], DelayStateDescriptor);
+            }
+
+            indices = frame.GetActionIndices(AT.Flow.Branch);
+            for (var index = 0; index < indices.Count; index++)
+            {
+                NodePrivateExecutionStateSupport.DisposeExecutionState(frame, indices[index], BranchStateDescriptor);
+            }
+
+            indices = frame.GetActionIndices(AT.Flow.Join);
+            for (var index = 0; index < indices.Count; index++)
+            {
+                NodePrivateExecutionStateSupport.DisposeExecutionState(frame, indices[index], JoinStateDescriptor);
             }
         }
 
-        /// <summary>处理 Flow.End：Running → Completed，标记蓝图执行结束</summary>
-        private void ProcessFlowEnd(BlueprintFrame frame)
+        public override void Update(ref FrameView view)
         {
-            var indices = frame.GetActionIndices(AT.Flow.End);
-            for (int i = 0; i < indices.Count; i++)
-            {
-                var idx = indices[i];
-                ref var state = ref frame.States[idx];
-
-                if (state.Phase == ActionPhase.Running)
-                {
-                    state.Phase = ActionPhase.Completed;
-                    frame.IsCompleted = true;
-                    Debug.Log($"[FlowSystem] {AT.Flow.End} (index={idx}) → Completed，蓝图执行结束");
-                }
-            }
+            ProcessFlowStart(ref view);
+            ProcessFlowEnd(ref view);
+            ProcessFlowBranch(ref view);
+            ProcessFlowDelay(ref view);
+            ProcessFlowJoin(ref view);
         }
 
-        /// <summary>
-        /// 处理 Flow.Delay：Running 状态下计数 Tick，达到延迟后 Completed。
-        /// <para>Phase 1 基础实现，从 Properties 读取 "delay" 属性（秒数 → Tick 数近似）。</para>
-        /// </summary>
-        private void ProcessFlowDelay(BlueprintFrame frame)
+        private void ProcessFlowStart(ref FrameView view)
         {
-            var indices = frame.GetActionIndices(AT.Flow.Delay);
+            if (Frame == null)
+            {
+                return;
+            }
+
+            var indices = view.Query.GetActionIndices(AT.Flow.Start);
+            if (indices == null) return;
+
+            NodePrivateExecutionStateSupport.EnsureLifecycleBinding(Frame, StartStateDescriptor, ref _startLifecycleBindingRegistered);
             for (int i = 0; i < indices.Count; i++)
             {
                 var idx = indices[i];
-                ref var state = ref frame.States[idx];
-
+                ref var state = ref view.States[idx];
                 if (state.Phase != ActionPhase.Running)
+                {
                     continue;
-
-                // 首次进入：从属性读取延迟 Tick 数
-                if (state.IsFirstEntry)
-                {
-                    state.IsFirstEntry = false;
-
-                    float delaySec = frame.GetProperty(idx, ActionPortIds.FlowDelay.Duration, 1f);
-                    // 简单映射：1 秒 ≈ 60 Tick（假设 60fps，后续迁移时使用确定性时间）
-                    state.CustomInt = delaySec > 0f
-                        ? Mathf.Max(1, Mathf.RoundToInt(delaySec * 60f))
-                        : 60; // 无配置时默认 1 秒
-                    Debug.Log($"[FlowSystem] Flow.Delay (index={idx}) 开始等待 {state.CustomInt} Ticks");
                 }
 
-                // 达到目标 Tick 数 → Completed
-                if (state.TicksInPhase >= state.CustomInt)
-                {
-                    state.Phase = ActionPhase.Completed;
-                    Debug.Log($"[FlowSystem] Flow.Delay (index={idx}) → Completed (waited {state.TicksInPhase} ticks)");
-                }
+                FlowInstantExecutionSupport.TryExecute(
+                    ref view,
+                    Frame,
+                    idx,
+                    ref state,
+                    StartStateDescriptor,
+                    new FlowInstantNodeRuntimePlan(
+                        "intrinsic",
+                        "intrinsic | Flow.Start",
+                        "发射默认 out 端口",
+                        AT.Flow.Start,
+                        ActionPortIds.FlowStart.Out,
+                        isTerminal: false,
+                        ActionPortIds.FlowStart.Out));
             }
         }
 
-        /// <summary>
-        /// 处理 Flow.Join：Running → 立即 Completed。
-        /// <para>
-        /// Flow.Join 由 TransitionSystem 激活（收齐所有输入后），
-        /// FlowSystem 负责将其立即标记为 Completed 并触发输出。
-        /// </para>
-        /// </summary>
-        private void ProcessFlowJoin(BlueprintFrame frame)
+        private void ProcessFlowEnd(ref FrameView view)
         {
-            var indices = frame.GetActionIndices(AT.Flow.Join);
+            if (Frame == null)
+            {
+                return;
+            }
+
+            var indices = view.Query.GetActionIndices(AT.Flow.End);
+            if (indices == null) return;
+
+            NodePrivateExecutionStateSupport.EnsureLifecycleBinding(Frame, EndStateDescriptor, ref _endLifecycleBindingRegistered);
             for (int i = 0; i < indices.Count; i++)
             {
                 var idx = indices[i];
-                ref var state = ref frame.States[idx];
-
-                if (state.Phase == ActionPhase.Running)
+                ref var state = ref view.States[idx];
+                if (state.Phase != ActionPhase.Running)
                 {
-                    state.Phase = ActionPhase.Completed;
-                    Debug.Log($"[FlowSystem] Flow.Join (index={idx}) → Completed");
+                    continue;
                 }
+
+                FlowInstantExecutionSupport.TryExecute(
+                    ref view,
+                    Frame,
+                    idx,
+                    ref state,
+                    EndStateDescriptor,
+                    new FlowInstantNodeRuntimePlan(
+                        "intrinsic",
+                        "intrinsic | Flow.End",
+                        "发射默认 out 端口并结束蓝图",
+                        AT.Flow.End,
+                        FlowEndCompletionEventValue,
+                        isTerminal: true,
+                        "out"),
+                    markBlueprintCompleted: true);
+            }
+        }
+
+        private void ProcessFlowDelay(ref FrameView view)
+        {
+            var indices = view.Query.GetActionIndices(AT.Flow.Delay);
+            if (indices == null || Frame == null) return;
+
+            NodePrivateExecutionStateSupport.EnsureLifecycleBinding(Frame, DelayStateDescriptor, ref _delayLifecycleBindingRegistered);
+            for (int i = 0; i < indices.Count; i++)
+            {
+                var idx = indices[i];
+                ref var state = ref view.States[idx];
+                if (state.Phase != ActionPhase.Running) continue;
+
+                FlowDelayExecutionSupport.TryExecute(
+                    ref view,
+                    Frame,
+                    idx,
+                    ref state);
+            }
+        }
+
+        private void ProcessFlowBranch(ref FrameView view)
+        {
+            var indices = view.Query.GetActionIndices(AT.Flow.Branch);
+            if (indices == null || Frame == null) return;
+
+            NodePrivateExecutionStateSupport.EnsureLifecycleBinding(Frame, BranchStateDescriptor, ref _branchLifecycleBindingRegistered);
+            for (int i = 0; i < indices.Count; i++)
+            {
+                var idx = indices[i];
+                ref var state = ref view.States[idx];
+                if (state.Phase != ActionPhase.Running)
+                {
+                    continue;
+                }
+
+                FlowBranchExecutionSupport.TryExecute(
+                    ref view,
+                    Frame,
+                    idx,
+                    ref state);
+            }
+        }
+
+        private void ProcessFlowJoin(ref FrameView view)
+        {
+            var indices = view.Query.GetActionIndices(AT.Flow.Join);
+            if (indices == null || Frame == null) return;
+
+            NodePrivateExecutionStateSupport.EnsureLifecycleBinding(Frame, JoinStateDescriptor, ref _joinLifecycleBindingRegistered);
+            for (int i = 0; i < indices.Count; i++)
+            {
+                var idx = indices[i];
+                ref var state = ref view.States[idx];
+                if (state.Phase != ActionPhase.Running)
+                {
+                    continue;
+                }
+
+                FlowJoinExecutionSupport.TryExecute(
+                    ref view,
+                    Frame,
+                    idx,
+                    ref state);
             }
         }
     }

@@ -1,4 +1,5 @@
 #nullable enable
+using SceneBlueprint.Contract;
 
 namespace SceneBlueprint.Runtime.Interpreter.Diagnostics
 {

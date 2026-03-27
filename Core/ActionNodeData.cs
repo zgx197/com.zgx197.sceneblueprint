@@ -77,8 +77,11 @@ namespace SceneBlueprint.Core
             // 遍历所有属性定义，将有默认值的属性填充到 PropertyBag
             foreach (var prop in def.Properties)
             {
-                if (prop.DefaultValue != null)
-                    data.Properties.Set(prop.Key, prop.DefaultValue);
+                var defaultValue = PropertyDefinitionValueUtility.CreateDefaultBagValue(prop);
+                if (defaultValue != null)
+                {
+                    data.Properties.Set(prop.Key, defaultValue);
+                }
             }
             return data;
         }

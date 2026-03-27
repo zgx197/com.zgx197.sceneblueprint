@@ -137,13 +137,34 @@ namespace SceneBlueprint.Core
         // ─── 场景需求声明 ───
 
         /// <summary>
-        /// 场景标记需求列表——声明该行动需要什么类型的场景标记。
+        /// 场景标记需求列表——从 Properties 中自动收集所有 SceneBinding 的 BindingRequirement。
         /// <para>
         /// 为空数组表示该行动不需要场景标记（如 Delay、Branch 等纯逻辑节点）。
         /// 非空时，Scene View 右键菜单会根据此声明自动创建标记并绑定。
         /// </para>
+        /// <para>
+        /// 也可手动赋值（向后兼容手写 ActionDef）。手动赋值后优先于自动推导。
+        /// </para>
         /// </summary>
-        public MarkerRequirement[] SceneRequirements { get; set; } = System.Array.Empty<MarkerRequirement>();
+        private MarkerRequirement[]? _sceneRequirements;
+        public MarkerRequirement[] SceneRequirements
+        {
+            get
+            {
+                if (_sceneRequirements != null)
+                    return _sceneRequirements;
+
+                // 自动从 Properties 推导
+                var list = new System.Collections.Generic.List<MarkerRequirement>();
+                foreach (var prop in Properties)
+                {
+                    if (prop.Type == PropertyType.SceneBinding && prop.BindingRequirement != null)
+                        list.Add(prop.BindingRequirement);
+                }
+                return list.Count > 0 ? list.ToArray() : System.Array.Empty<MarkerRequirement>();
+            }
+            set => _sceneRequirements = value;
+        }
 
         // ─── 行为标记 ───
 
@@ -176,6 +197,155 @@ namespace SceneBlueprint.Core
         /// </para>
         /// </summary>
         public IActionValidator? Validator { get; set; }
+
+        /// <summary>
+        /// 按语义 Id 查找端口定义。
+        /// </summary>
+        public PortDefinition? FindPort(string portId)
+        {
+            if (string.IsNullOrWhiteSpace(portId))
+            {
+                return null;
+            }
+
+            for (var index = 0; index < Ports.Length; index++)
+            {
+                var port = Ports[index];
+                if (string.Equals(port.Id, portId, System.StringComparison.Ordinal))
+                {
+                    return port;
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// 按图结构语义角色查找端口定义。
+        /// </summary>
+        public PortDefinition[] FindPortsByGraphRole(PortGraphRole graphRole)
+        {
+            if (Ports.Length == 0 || graphRole == PortGraphRole.None)
+            {
+                return System.Array.Empty<PortDefinition>();
+            }
+
+            var result = new System.Collections.Generic.List<PortDefinition>();
+            for (var index = 0; index < Ports.Length; index++)
+            {
+                var port = Ports[index];
+                if (port.GraphRole == graphRole)
+                {
+                    result.Add(port);
+                }
+            }
+
+            return result.Count == 0 ? System.Array.Empty<PortDefinition>() : result.ToArray();
+        }
+
+        /// <summary>
+        /// 查找当前定义声明的所有 SceneBinding 属性。
+        /// 让 Inspector / validation / compiler / export 优先复用同一套 definition 入口，
+        /// 而不是各自手扫 Properties 再重复判断类型。
+        /// </summary>
+        public PropertyDefinition[] FindSceneBindingProperties()
+        {
+            if (Properties.Length == 0)
+            {
+                return System.Array.Empty<PropertyDefinition>();
+            }
+
+            var result = new System.Collections.Generic.List<PropertyDefinition>();
+            for (var index = 0; index < Properties.Length; index++)
+            {
+                var property = Properties[index];
+                if (property.Type == PropertyType.SceneBinding)
+                {
+                    result.Add(property);
+                }
+            }
+
+            return result.Count == 0 ? System.Array.Empty<PropertyDefinition>() : result.ToArray();
+        }
+
+        /// <summary>
+        /// 当前定义是否声明了 SceneBinding。
+        /// </summary>
+        public bool HasSceneBindingDeclarations()
+        {
+            return FindSceneBindingProperties().Length > 0;
+        }
+
+        /// <summary>
+        /// 获取正式声明的输出变量列表。
+        /// </summary>
+        public OutputVariableDefinition[] GetDeclaredOutputVariables()
+        {
+            return OutputVariables ?? System.Array.Empty<OutputVariableDefinition>();
+        }
+
+        /// <summary>
+        /// 当前定义是否声明了输出变量。
+        /// </summary>
+        public bool HasOutputVariableDeclarations()
+        {
+            return GetDeclaredOutputVariables().Length > 0;
+        }
+
+        /// <summary>
+        /// 获取带 GraphRole 的端口声明。
+        /// </summary>
+        public PortDefinition[] FindGraphDeclarationPorts()
+        {
+            if (Ports.Length == 0)
+            {
+                return System.Array.Empty<PortDefinition>();
+            }
+
+            var result = new System.Collections.Generic.List<PortDefinition>();
+            for (var index = 0; index < Ports.Length; index++)
+            {
+                var port = Ports[index];
+                if (port.GraphRole != PortGraphRole.None)
+                {
+                    result.Add(port);
+                }
+            }
+
+            return result.Count == 0 ? System.Array.Empty<PortDefinition>() : result.ToArray();
+        }
+
+        /// <summary>
+        /// 当前定义是否声明了图结构语义。
+        /// </summary>
+        public bool HasGraphDeclarations()
+        {
+            return FindGraphDeclarationPorts().Length > 0;
+        }
+
+        /// <summary>
+        /// 按属性键查找定义。
+        /// 让 override / compiler / fallback 能优先复用 definition 元数据，
+        /// 而不是继续手写“按下标取第几个属性”的隐式协议。
+        /// </summary>
+        public PropertyDefinition? FindProperty(string propertyKey)
+        {
+            if (string.IsNullOrWhiteSpace(propertyKey))
+            {
+                return null;
+            }
+
+            for (var index = 0; index < Properties.Length; index++)
+            {
+                var property = Properties[index];
+                if (string.Equals(property.Key, propertyKey, System.StringComparison.Ordinal))
+                {
+                    return property;
+                }
+            }
+
+            return null;
+        }
     }
 
     /// <summary>

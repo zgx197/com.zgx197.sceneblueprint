@@ -1,4 +1,6 @@
 #nullable enable
+using SceneBlueprint.Contract;
+using SceneBlueprint.Runtime.Settings;
 using UnityEngine;
 
 namespace SceneBlueprint.Runtime
@@ -12,17 +14,7 @@ namespace SceneBlueprint.Runtime
     /// - 调试日志开关
     /// - 性能监控选项
     /// </para>
-    /// <para>
-    /// 使用方式：
-    /// 1. 在 Project 窗口右键 → Create → SceneBlueprint → Runtime Settings
-    /// 2. 将创建的配置文件放在 Resources 目录下（推荐路径：Assets/Resources/SceneBlueprintRuntimeSettings.asset）
-    /// 3. 代码中通过 BlueprintRuntimeSettings.Instance 访问
-    /// </para>
     /// </summary>
-    [CreateAssetMenu(
-        fileName = "SceneBlueprintRuntimeSettings",
-        menuName = "SceneBlueprint/Runtime Settings",
-        order = 90)]
     public class BlueprintRuntimeSettings : ScriptableObject
     {
         // ══════════════════════════════════════════
@@ -32,15 +24,11 @@ namespace SceneBlueprint.Runtime
         private static BlueprintRuntimeSettings? _instance;
 
         /// <summary>
-        /// 配置文件的资源路径（相对于 Resources 目录）。
-        /// 用户需将配置文件放在项目 Resources 目录的该子路径下，
-        /// 例如：Assets/Resources/SceneBlueprint/SceneBlueprintRuntimeSettings.asset
-        /// </summary>
-        private const string ResourcePath = "SceneBlueprint/SceneBlueprintRuntimeSettings";
-
-        /// <summary>
-        /// 全局配置实例（从 Resources 加载）。
-        /// <para>如果未找到配置文件，返回默认配置。</para>
+        /// 全局配置实例。
+        /// <para>
+        /// 该类型当前只作为兼容壳保留，真实数据源统一来自 <see cref="SceneBlueprintProjectConfig.Runtime"/>。
+        /// 若项目配置尚未加载，则回退到本类中的代码默认值。
+        /// </para>
         /// </summary>
         public static BlueprintRuntimeSettings Instance
         {
@@ -48,12 +36,12 @@ namespace SceneBlueprint.Runtime
             {
                 if (_instance == null)
                 {
-                    _instance = Resources.Load<BlueprintRuntimeSettings>(ResourcePath);
-                    if (_instance == null)
+                    _instance = CreateInstance<BlueprintRuntimeSettings>();
+
+                    if (GetProjectRuntimeSettings() == null)
                     {
-                        Debug.LogWarning($"[BlueprintRuntimeSettings] 未找到配置文件，使用默认配置。\n" +
-                                         $"请在 Unity 菜单 SceneBlueprint → 打开运行时设置 创建配置文件");
-                        _instance = CreateInstance<BlueprintRuntimeSettings>();
+                        Debug.LogWarning($"[BlueprintRuntimeSettings] 未找到项目配置，当前回退到代码默认值。\n" +
+                                         $"请在 SceneBlueprint 设置中心检查 ProjectConfig.Runtime 配置。");
                     }
                 }
                 return _instance;
@@ -73,8 +61,30 @@ namespace SceneBlueprint.Runtime
                  "- 手动模式（>0）：固定每帧执行指定数量的 Tick")]
         [SerializeField] private int _ticksPerFrame = 0;
 
+        [Tooltip("秒数换算为 Tick 数时使用的统一舍入策略。建议默认使用 Ceil，避免实际等待时间短于配置值。")]
+        [SerializeField] private BlueprintTimeRoundingMode _timeRoundingMode = BlueprintTimeRoundingMode.Ceil;
+
         /// <summary>目标逻辑帧率（Tick/秒）</summary>
-        public int TargetTickRate => Mathf.Max(1, _targetTickRate);
+        public int TargetTickRate => GetProjectRuntimeSettings()?.TargetTickRate ?? Mathf.Max(1, _targetTickRate);
+
+        /// <summary>
+        /// 秒数转换为 Tick 数时采用的舍入策略。
+        /// <para>
+        /// 该属性与 <see cref="TargetTickRate"/> 一起构成完整的时间语义配置。
+        /// 如果只统一 TickRate、不统一舍入方式，运行时仍然会因为不同系统使用 Ceil / Round / Floor
+        /// 而产生行为偏差。
+        /// </para>
+        /// </summary>
+        public BlueprintTimeRoundingMode TimeRoundingMode => GetProjectRuntimeSettings()?.TimeRoundingMode ?? _timeRoundingMode;
+
+        /// <summary>
+        /// 当前运行时应使用的时间配置快照。
+        /// <para>
+        /// Adapter 会在 BeginTick 时读取此快照，并写入 FrameView，之后所有 System 只消费该快照，
+        /// 从而避免在执行热路径中到处直接读取 ScriptableObject 单例。
+        /// </para>
+        /// </summary>
+        public BlueprintTimeSettings TimeSettings => GetProjectRuntimeSettings()?.ToTimeSettings() ?? new BlueprintTimeSettings(TargetTickRate, TimeRoundingMode);
 
         /// <summary>
         /// 每个 Unity 渲染帧执行的 Tick 数。
@@ -83,7 +93,7 @@ namespace SceneBlueprint.Runtime
         /// - 返回 >0：固定模式，每帧执行固定数量的 Tick
         /// </para>
         /// </summary>
-        public int TicksPerFrame => Mathf.Max(0, _ticksPerFrame);
+        public int TicksPerFrame => GetProjectRuntimeSettings()?.TicksPerFrame ?? Mathf.Max(0, _ticksPerFrame);
 
         /// <summary>
         /// 根据目标帧率和实际 Unity 帧率计算每帧应执行的 Tick 数。
@@ -91,7 +101,7 @@ namespace SceneBlueprint.Runtime
         /// </summary>
         public int CalculateTicksPerFrame(float unityFPS)
         {
-            if (_ticksPerFrame > 0) return _ticksPerFrame; // 手动模式
+            if (TicksPerFrame > 0) return TicksPerFrame; // 手动模式
             
             // 自动模式：根据帧率计算
             if (unityFPS <= 0) return 1;
@@ -114,13 +124,13 @@ namespace SceneBlueprint.Runtime
         [SerializeField] private int _batchTickCount = 10;
 
         /// <summary>测试场景是否自动执行</summary>
-        public bool AutoRunInTestScene => _autoRunInTestScene;
+        public bool AutoRunInTestScene => GetProjectRuntimeSettings()?.AutoRunInTestScene ?? _autoRunInTestScene;
 
         /// <summary>最大 Tick 限制</summary>
-        public int MaxTicksLimit => Mathf.Max(100, _maxTicksLimit);
+        public int MaxTicksLimit => GetProjectRuntimeSettings()?.MaxTicksLimit ?? Mathf.Max(100, _maxTicksLimit);
 
         /// <summary>批量执行的 Tick 数</summary>
-        public int BatchTickCount => Mathf.Max(1, _batchTickCount);
+        public int BatchTickCount => GetProjectRuntimeSettings()?.BatchTickCount ?? Mathf.Max(1, _batchTickCount);
 
         // ══════════════════════════════════════════
         //  调试配置
@@ -130,14 +140,38 @@ namespace SceneBlueprint.Runtime
         [Tooltip("启用详细日志（包括 BlueprintLoader、TransitionSystem 等的详细输出）")]
         [SerializeField] private bool _enableDetailedLogs = true;
 
+        [Tooltip("在测试窗口逐 Tick 执行时输出 Tick 分隔日志")]
+        [SerializeField] private bool _enableTickBoundaryLogs = false;
+
+        [Tooltip("为 TransitionSystem 输出带来源上下文的激活日志")]
+        [SerializeField] private bool _enableTransitionDetailLogs = true;
+
+        [Tooltip("为 Trigger.EnterArea 输出初始化和等待诊断日志")]
+        [SerializeField] private bool _enableTriggerWaitDiagnostics = true;
+
+        [Tooltip("蓝图结束时输出一份运行摘要")]
+        [SerializeField] private bool _enableCompletionSummaryLogs = true;
+
         [Tooltip("记录每个 System 的执行信息（性能分析用）")]
         [SerializeField] private bool _logSystemExecution = false;
 
         /// <summary>是否启用详细日志</summary>
-        public bool EnableDetailedLogs => _enableDetailedLogs;
+        public bool EnableDetailedLogs => GetProjectRuntimeSettings()?.EnableDetailedLogs ?? _enableDetailedLogs;
+
+        /// <summary>是否输出 Tick 边界日志</summary>
+        public bool EnableTickBoundaryLogs => GetProjectRuntimeSettings()?.EnableTickBoundaryLogs ?? _enableTickBoundaryLogs;
+
+        /// <summary>是否输出转场详情日志</summary>
+        public bool EnableTransitionDetailLogs => GetProjectRuntimeSettings()?.EnableTransitionDetailLogs ?? _enableTransitionDetailLogs;
+
+        /// <summary>是否输出 Trigger 等待诊断</summary>
+        public bool EnableTriggerWaitDiagnostics => GetProjectRuntimeSettings()?.EnableTriggerWaitDiagnostics ?? _enableTriggerWaitDiagnostics;
+
+        /// <summary>是否输出运行结束摘要</summary>
+        public bool EnableCompletionSummaryLogs => GetProjectRuntimeSettings()?.EnableCompletionSummaryLogs ?? _enableCompletionSummaryLogs;
 
         /// <summary>是否记录 System 执行</summary>
-        public bool LogSystemExecution => _logSystemExecution;
+        public bool LogSystemExecution => GetProjectRuntimeSettings()?.LogSystemExecution ?? _logSystemExecution;
 
         // ══════════════════════════════════════════
         //  性能配置
@@ -148,7 +182,7 @@ namespace SceneBlueprint.Runtime
         [SerializeField] private bool _showPerformanceStats = false;
 
         /// <summary>是否显示性能统计</summary>
-        public bool ShowPerformanceStats => _showPerformanceStats;
+        public bool ShowPerformanceStats => GetProjectRuntimeSettings()?.ShowPerformanceStats ?? _showPerformanceStats;
 
         // ══════════════════════════════════════════
         //  编辑器辅助
@@ -161,6 +195,11 @@ namespace SceneBlueprint.Runtime
             _ticksPerFrame = Mathf.Max(0, _ticksPerFrame);
             _maxTicksLimit = Mathf.Max(100, _maxTicksLimit);
             _batchTickCount = Mathf.Max(1, _batchTickCount);
+        }
+
+        private static SceneBlueprintRuntimeSettingsData? GetProjectRuntimeSettings()
+        {
+            return SceneBlueprintProjectConfig.FindLoadedInstance()?.Runtime;
         }
     }
 }

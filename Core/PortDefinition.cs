@@ -4,6 +4,26 @@ using NodeGraph.Core;
 
 namespace SceneBlueprint.Core
 {
+    /// <summary>
+    /// 端口在图结构里的正式语义角色。
+    /// 这层语义不替代 semanticId，而是把“这个端口在图里的职责”正式写回定义层。
+    /// </summary>
+    public enum PortGraphRole
+    {
+        None,
+        PrimaryInput,
+        PrimaryOutput,
+        TrueBranch,
+        FalseBranch,
+        PassBranch,
+        RejectBranch,
+        TimeoutBranch,
+        TriggerBranch,
+        JoinInput,
+        ConditionInput,
+        CompareValueInput,
+    }
+
     // ═══════════════════════════════════════════════════════════
     //  端口定义 (PortDefinition)
     //
@@ -89,6 +109,43 @@ namespace SceneBlueprint.Core
         /// </para>
         /// </summary>
         public object? DefaultValue { get; set; }
+
+        /// <summary>
+        /// 端口在图结构里的正式语义角色。
+        /// <para>
+        /// 例如 TrueBranch / FalseBranch / JoinInput / TimeoutBranch。
+        /// 这让 validator / compiler / Inspector 可以优先按角色理解拓扑，而不是继续硬编码端口 id。
+        /// </para>
+        /// </summary>
+        public PortGraphRole GraphRole { get; set; } = PortGraphRole.None;
+
+        /// <summary>
+        /// 端口的人类可读语义摘要标签。
+        /// <para>为空时回退到 DisplayName 或 Id。</para>
+        /// </summary>
+        public string SummaryLabel { get; set; } = "";
+
+        /// <summary>
+        /// 对该语义端口的最小连接建议数。
+        /// <para>当前主要给 validator / Inspector 提示使用，0 表示无额外要求。</para>
+        /// </summary>
+        public int MinConnections { get; set; }
+
+        /// <summary>
+        /// 为端口声明正式的图结构语义角色。
+        /// </summary>
+        public PortDefinition WithGraphRole(
+            PortGraphRole graphRole,
+            string? summaryLabel = null,
+            int minConnections = 0)
+        {
+            GraphRole = graphRole;
+            SummaryLabel = string.IsNullOrWhiteSpace(summaryLabel)
+                ? (!string.IsNullOrWhiteSpace(DisplayName) ? DisplayName : Id)
+                : summaryLabel;
+            MinConnections = Math.Max(0, minConnections);
+            return this;
+        }
     }
 
     /// <summary>
@@ -302,4 +359,3 @@ namespace SceneBlueprint.Core
         }
     }
 }
-
