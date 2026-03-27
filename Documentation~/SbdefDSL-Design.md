@@ -193,9 +193,10 @@ namespace SceneBlueprintUser.Generated
 }
 ```
 
-### 3.3 v0.2 产物：`ActionDefs.*.g.cs` ✅
+### 3.3 v0.2 产物：`ActionDefs.*.g.cs` / `contracts_only` ✅
 
-完整 `IActionDefinitionProvider` 实现，替代手写 Def 文件。类名规则：`TypeId` 去点后缀 `Def`（如 `VFXCameraShakeDef`）。
+默认模式下，`.sbdef` 会生成完整 `IActionDefinitionProvider` 实现，替代手写 Def 文件。类名规则：`TypeId` 去点后缀 `Def`（如 `VFXCameraShakeDef`）。
+当文件顶层声明 `codegen contracts_only` 时，生成器只保留 `UAT.*` / `UActionPortIds.*` / 其他稳定契约输出，不再生成 `ActionDefs.*.g.cs`，并清理历史遗留的同名产物。
 
 ```csharp
 // Generated/ActionDefs.Vfx.g.cs
@@ -310,30 +311,45 @@ namespace SceneBlueprintUser.Generated.Editor
 
 ### 4.1 整体流程
 
-使用 **`ScriptedImporter`** 注册 `.sbdef` 扩展名，`.sbdef` 保存时自动触发代码生成。
+当前实现已经从“Unity 内部直接解析并生成”演进为“两段式工具链”：
 
-```
-.sbdef 文件（保存/导入）
-    ↓
-SbdefAssetImporter : ScriptedImporter
-    ↓
-SbdefLexer   → Token[]
-    ↓
-SbdefParser  → SbdefAst
-    ↓
-┌─────────────────┬──────────────────┬─────────────────┐
-SbdefActionEmitter ✅  SbdefDefEmitter ✅       SbdefMarkerEmitter ✅
-→ UAT.*.g.cs         → UActionPortIds.*.g.cs  → UMarkerTypeIds.*.g.cs
-                      → ActionDefs.*.g.cs       → UMarkers.*.g.cs
-                                                 → Editor/UMarkerDefs.*.g.cs
-    ↓
-File.WriteAllText()（仅内容变化时写入，避免无效触发）
-    ↓
-AssetDatabase.Refresh()
+1. `Editor/CodeGen/Sbdef/SbdefAssetImporter.cs` 负责让 `.sbdef` 文件作为 Unity 资产可见，并在导入后触发刷新。
+2. `Editor/CodeGen/Sbdef/SbdefCodeGen.cs` 负责定位/自动构建 `Tools~/SbdefGen` CLI。
+3. `Tools~/SbdefGen` 在 Unity 进程外完成词法分析、语法分析、AST 遍历和多类 emitter 输出。
+4. 生成文件写回用户工程的 `Generated/` 目录，仅在内容变化时覆盖，最后由 `AssetDatabase.Refresh()` 让 Unity 重新编译。
+
+```mermaid
+flowchart LR
+    A[".sbdef 文件（保存 / 导入）"] --> B["SbdefAssetImporter<br/>Unity ScriptedImporter"]
+    B --> C["SbdefCodeGen.Run()"]
+    C --> D["定位或自动构建<br/>Tools~/SbdefGen"]
+    D --> E["sbdef-gen CLI"]
+
+    E --> F["SbdefLexer"]
+    F --> G["SbdefParser"]
+    G --> H["SbdefAst"]
+
+    H --> I["SbdefActionEmitter<br/>UAT.*.cs"]
+    H --> J["SbdefDefEmitter<br/>UActionPortIds.*.cs<br/>ActionDefs.*.cs"]
+    H --> K["SbdefMarkerEmitter<br/>UMarkerTypeIds.*.cs<br/>Markers/*.cs<br/>Editor/UMarkerDefs.*.cs"]
+    H --> L["SbdefAnnotationEmitter<br/>Annotations/*.cs<br/>Editor/AnnotationDefs.*.cs<br/>Enums/*.cs"]
+    H --> M["SbdefEditorToolEmitter<br/>Editor/EditorTools/*.cs"]
+    H --> N["SbdefSignalEmitter<br/>USignalTags.*.cs<br/>USignalPayloads.*.cs"]
+    H --> O["SbdefTagDimensionEmitter<br/>UTagDimensions.*.cs<br/>TagDimensionDefs.*.cs"]
+
+    I --> P["写入 Generated/（仅内容变化时覆盖）"]
+    J --> P
+    K --> P
+    L --> P
+    M --> P
+    N --> P
+    O --> P
+    P --> Q["AssetDatabase.Refresh()"]
 ```
 
-> `SbdefDefEmitter` 共享同一次 AST 遍历，生成 `UActionPortIds` 和 `ActionDefs`。  
-> `SbdefMarkerEmitter` 生成的 `Editor/UMarkerDefs.*.g.cs` 路由到 `Generated/Editor/` 子目录，属 Editor-only 程序集。
+> `SbdefDefEmitter` 会同时生成 `UActionPortIds` 与 `ActionDefs`；若声明 `codegen contracts_only`，则只保留契约文件并清理陈旧的 `ActionDefs.*` 输出。  
+> `SbdefMarkerEmitter`、`SbdefAnnotationEmitter`、`SbdefEditorToolEmitter` 会将 Editor-only 代码路由到 `Generated/Editor/` 子目录。  
+> `SbdefPipeline` 支持跨文件收集全局枚举、Marker 基类信息和 Annotation 使用关系，再逐文件生成输出。
 
 ### 4.2 AST 结构（C#）
 
@@ -385,32 +401,42 @@ record MarkerDecl(
 SceneBlueprintUser/
   Definitions/
     vfx.sbdef                        ← 用户手写（含 displayName/category/themeColor/duration/label/min/max）
-    spawn.sbdef
+    spawn.sbdef                      ← `codegen contracts_only`：仅生成契约，正式 definition 由 Actions/Spawn + SpawnDefinition 承接
+    signal.sbdef                     ← `codegen contracts_only`：仅生成契约，正式 definition 由 Actions/Signal + SignalDefinition 承接
     trigger.sbdef
     markers.sbdef                    ← v0.3 新增，含 marker 声明
   Generated/                         ← 自动生成，提交到 git
     SceneBlueprintUser.Generated.asmdef   ← Runtime，引用 SceneBlueprint.Core + .Runtime
     UAT.Vfx.g.cs                     ← v0.1 ✅
     UAT.Spawn.g.cs                   ← v0.1 ✅
+    UAT.Signal.g.cs                  ← v0.1 ✅
     UAT.Trigger.g.cs                 ← v0.1 ✅
     UActionPortIds.Vfx.g.cs          ← v0.2 ✅
     UActionPortIds.Spawn.g.cs        ← v0.2 ✅
+    UActionPortIds.Signal.g.cs       ← v0.2 ✅
     UActionPortIds.Trigger.g.cs      ← v0.2 ✅
     ActionDefs.Vfx.g.cs              ← v0.2 ✅
-    ActionDefs.Spawn.g.cs            ← v0.2 ✅
     ActionDefs.Trigger.g.cs          ← v0.2 ✅
     UMarkerTypeIds.Markers.g.cs      ← v0.3 ✅
     UMarkers.Markers.g.cs            ← v0.3 ✅
     Editor/                          ← Editor-only 子目录
       SceneBlueprintUser.Generated.Editor.asmdef  ← Editor-only，引用 SceneBlueprint.Editor
       UMarkerDefs.Markers.g.cs       ← v0.3 ✅
+  Actions/
+    Spawn/SpawnActionDefs.cs         ← Spawn 的人工承接 definition 层
+    SignalActionDefs.cs              ← Signal 的人工承接 definition 层
+  SpawnDefinition/
+    SpawnDefinitionShared.cs         ← Spawn 的共享 definition/property 层
+  SignalDefinition/
+    SignalDefinitionShared.cs        ← Signal 的共享 definition/property 层
 ```
 
 | 类型 | 源文件 | 生成文件 | 版本 |
 |---|---|---|---|
 | Action 类型常量 | `*.sbdef` | `Generated/UAT.*.g.cs` | v0.1 ✅ |
 | Port PropertyKey | `*.sbdef` | `Generated/UActionPortIds.*.g.cs` | v0.2 ✅ |
-| ActionDefinitionProvider | `*.sbdef` | `Generated/ActionDefs.*.g.cs` | v0.2 ✅ |
+| ActionDefinitionProvider（默认模式） | `*.sbdef` | `Generated/ActionDefs.*.g.cs` | v0.2 ✅ |
+| 合同专用模式（`codegen contracts_only`） | `*.sbdef` | 仅生成 `UAT.*` / `UActionPortIds.*` 等契约文件，不生成 `ActionDefs.*.g.cs` | v0.2+ ✅ |
 | Marker 类型 ID 常量 | `*.sbdef` | `Generated/UMarkerTypeIds.*.g.cs` | v0.3 ✅ |
 | Marker 组件骨架 | `*.sbdef` | `Generated/UMarkers.*.g.cs` | v0.3 ✅ |
 | MarkerDefinitionProvider | `*.sbdef` | `Generated/Editor/UMarkerDefs.*.g.cs` | v0.3 ✅ |
