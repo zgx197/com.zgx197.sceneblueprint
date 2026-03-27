@@ -1,22 +1,52 @@
-# SceneBlueprint
+<div align="center">
+  <h1>SceneBlueprint</h1>
+  <p><strong>面向 Unity 的场景级蓝图编辑框架</strong></p>
+  <p>DSL 定义 · 编辑器编排 · 导出契约 · 运行时解释执行</p>
+  <p>
+    <img src="https://img.shields.io/badge/Unity-2021.3%2B-222c37?logo=unity&logoColor=white" alt="Unity 2021.3+" />
+    <img src="https://img.shields.io/badge/Architecture-Editor%20%2B%20Runtime-2f6f5e" alt="Editor + Runtime" />
+    <img src="https://img.shields.io/badge/Runtime-Interpreter%20Style-355c7d" alt="Interpreter Style" />
+    <img src="https://img.shields.io/badge/DSL-.sbdef-7a4e2d" alt=".sbdef DSL" />
+    <img src="https://img.shields.io/badge/Docs-Mermaid%20Included-4c5b8f" alt="Mermaid Included" />
+  </p>
+</div>
 
-面向 Unity 的场景级蓝图编辑框架。它同时覆盖了 DSL 定义、编辑器编排、导出契约、运行时解释执行，以及 Marker / Annotation / Signal / Runtime State / Snapshot 等基础设施。
+| 维度 | 说明 |
+|---|---|
+| 🎯 核心定位 | 用一套正式的场景蓝图框架，把“制作蓝图”和“执行蓝图”拆成清晰的两部分 |
+| 🧠 架构特征 | 参考编程语言解释器的思路，按声明、语义、计划、运行时状态、解释执行分层 |
+| 🧩 项目组织 | 完全支持编辑器工程与运行时工程分离 |
+| 👥 适用对象 | TA、策划工具开发、玩法框架、运行时蓝图接入、项目级场景流程系统 |
 
-## 功能亮点
+> 如果你第一次看这个仓库，建议先读“快速导航”与“两大部分”，再进入后面的架构细节。
 
-- **可视化蓝图编辑器**：基于 `com.zgx197.nodegraph` 的节点图编辑、工作区恢复、分析面板、预览与测试窗口
-- **Action / Property / Blackboard 体系**：`ActionDefinition`、`PropertyDefinition`、`ActionRegistry`、变量声明与端口默认值统一收口
-- **Marker / Annotation / Spatial 体系**：场景标记、标注导出、空间绑定、2D/3D 适配器、Gizmo 渲染与交互工具链
-- **`.sbdef` DSL 工具链**：`.sbdef` 作为 SSOT，经 Unity Importer + `Tools~/SbdefGen` CLI 生成运行时与编辑器注册代码
-- **运行时解释器**：`BlueprintLoader`、`BlueprintRunner`、System 调度、SignalBus、运行时状态域、快照导出/回放
-- **知识与调试能力**：编辑器内知识服务、AI Chat 面板、运行时状态浏览、帧历史与调试快照
+## 🧭 快速导航
 
-## 运行环境
+- [🧱 这是什么](#两大部分)
+- [📦 怎么安装](#安装)
+- [📝 怎么快速理解 DSL](#dsl-快速入门)
+- [🏗️ 怎么理解整体架构](#架构)
+- [🗂️ 先看哪几个核心类型](#三个最重要的数据载体)
+- [🔑 有哪些容易漏掉的重要概念](#几个容易漏掉但很关键的概念)
+- [👀 第一次进入代码库怎么看](#怎么阅读这个仓库)
+
+## ✨ 功能亮点
+
+| 能力 | 说明 |
+|---|---|
+| 🖥️ 可视化蓝图编辑器 | 基于 `com.zgx197.nodegraph` 的节点图编辑、工作区恢复、分析面板、预览与测试窗口 |
+| 🔧 Action / Property / Blackboard 体系 | `ActionDefinition`、`PropertyDefinition`、`ActionRegistry`、变量声明与端口默认值统一收口 |
+| 📍 Marker / Annotation / Spatial 体系 | 场景标记、标注导出、空间绑定、2D/3D 适配器、Gizmo 渲染与交互工具链 |
+| 🧾 `.sbdef` DSL 工具链 | `.sbdef` 作为 SSOT，经 Unity Importer + `Tools~/SbdefGen` CLI 生成运行时与编辑器注册代码 |
+| ▶️ 运行时解释器 | `BlueprintLoader`、`BlueprintRunner`、System 调度、SignalBus、运行时状态域、快照导出/回放 |
+| 💡 知识与调试能力 | 编辑器内知识服务、AI Chat 面板、运行时状态浏览、帧历史与调试快照 |
+
+## 🧪 运行环境
 
 - Unity 2021.3+
 - [`com.zgx197.nodegraph`](https://github.com/zgx197/com.zgx197.nodegraph) 0.1.0+
 
-## 安装
+## 📦 安装
 
 在项目的 `Packages/manifest.json` 中添加：
 
@@ -29,12 +59,35 @@
 }
 ```
 
-## 两大部分
+## 📚 阅读建议
+
+| 你现在最关心什么 | 建议先看 |
+|---|---|
+| 我只想知道这个仓库是干什么的 | “两大部分” |
+| 我想知道编辑器和运行时怎么衔接 | “三个最重要的数据载体” |
+| 我想知道为什么支持项目分离 | “完全支持编辑器和运行时项目分离” 与 “项目分离架构” |
+| 我想知道业务层应该怎么接 | “业务侧如何承接这五层” |
+| 我想正式读代码 | “怎么阅读这个仓库” |
+
+## 🧱 两大部分
 
 理解 SceneBlueprint，最简单的方式就是把它看成两部分：
 
 1. **编辑器部分**：负责制作蓝图
 2. **运行时部分**：负责执行蓝图
+
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <strong>🛠️ 编辑器部分</strong><br/>
+      面向制作流程，关注定义、authoring、校验、编译预览和导出。
+    </td>
+    <td width="50%" valign="top">
+      <strong>▶️ 运行时部分</strong><br/>
+      面向执行流程，关注加载、调度、解释执行、状态、快照和调试。
+    </td>
+  </tr>
+</table>
 
 它们之间通过一个稳定的数据边界连接：
 
@@ -44,7 +97,7 @@ flowchart LR
     D --> R["运行时部分"]
 ```
 
-### 编辑器部分是做什么的
+### 🛠️ 编辑器部分是做什么的
 
 编辑器部分负责“写蓝图”。
 
@@ -62,7 +115,7 @@ flowchart LR
 - `Adapters/Unity3D`
 - `Tools~/SbdefGen/`
 
-### 运行时部分是做什么的
+### ▶️ 运行时部分是做什么的
 
 运行时部分负责“跑蓝图”。
 
@@ -79,7 +132,7 @@ flowchart LR
 - `Core/`
 - `Contract/`
 
-### 为什么一定要分成这两部分
+### ❓ 为什么一定要分成这两部分
 
 因为这两边要解决的问题根本不同：
 
@@ -93,7 +146,9 @@ flowchart LR
 
 所以 SceneBlueprint 从一开始就把这两部分当成两个正式子系统，而不是一个大而全的单体工具。
 
-### 完全支持编辑器和运行时项目分离
+> SceneBlueprint 最重要的设计判断不是“做一个节点编辑器”，而是“正式区分编辑器问题和运行时问题”。
+
+### 🔀 完全支持编辑器和运行时项目分离
 
 这一点不是口头上的“支持”，而是当前代码结构本身就这样设计的。
 
@@ -125,7 +180,7 @@ Package 侧已经拆开了：
 
 > 编辑器和运行时既能协作，也能分离。
 
-## 目录结构
+## 🗂️ 目录结构
 
 | 目录 | 作用 |
 |---|---|
@@ -141,7 +196,7 @@ Package 侧已经拆开了：
 | `Documentation~/` | DSL 设计文档与 VS Code / Windsurf 语法高亮扩展 |
 | `Templates/` / `Settings/` | 内置模板与项目级配置资产 |
 
-## DSL 快速入门
+## 📝 DSL 快速入门
 
 在用户工程中创建 `.sbdef` 文件，例如 `Assets/Extensions/SceneBlueprintUser/Definitions/`：
 
@@ -186,9 +241,9 @@ marker SpawnPoint {
 | `UTagDimensions.*.cs` / `TagDimensionDefs.*.cs` | Tag 维度常量与维度定义注册 |
 | `Editor/EditorTools/*.cs` | Marker 的 Editor Tool partial 类骨架 |
 
-## 架构
+## 🏗️ 架构
 
-### 设计理念
+### 🧠 设计理念
 
 如果你想再进一步理解内部实现，可以把 SceneBlueprint 看成一个“蓝图解释器”。
 
@@ -204,7 +259,13 @@ marker SpawnPoint {
 - 再有**运行时状态层**：把导出数据加载成统一的 `BlueprintFrame`。
 - 最后由**解释执行层**：`BlueprintRunner` 驱动一组无状态 `System` 循环解释。
 
-### 整体架构
+| 用一句话理解 | 对应含义 |
+|---|---|
+| 编辑器负责整理作者输入 | 定义、authoring、校验、语义整理、导出前编译 |
+| 导出边界负责稳定交付 | `SceneBlueprintData` 是编辑器与运行时之间的正式数据边界 |
+| 运行时负责解释执行 | `BlueprintLoader -> BlueprintFrame -> BlueprintRunner -> Systems` |
+
+### 🌐 整体架构
 
 先看最粗粒度的整体结构：
 
@@ -220,7 +281,7 @@ flowchart LR
 - 中间是“导出的稳定数据”
 - 右边是“怎么跑蓝图”
 
-### 五层运行解释架构
+### 🪜 五层运行解释架构
 
 这 5 层可以用很直白的话来理解：
 
@@ -240,7 +301,7 @@ flowchart LR
     D --> E["解释执行层"]
 ```
 
-### 编辑器部分内部链路
+### 🛠️ 编辑器部分内部链路
 
 编辑器部分不要理解成“一个窗口”，它实际上是一条制作链路：
 
@@ -257,7 +318,7 @@ flowchart LR
 - 编辑器不只是画图
 - 编辑器还负责校验、语义整理和导出前编译
 
-### 运行时部分内部链路
+### ▶️ 运行时部分内部链路
 
 运行时部分也不要理解成“直接读 JSON 然后 if-else 跑掉”，它同样有清晰主线：
 
@@ -276,7 +337,7 @@ flowchart LR
 - `BlueprintRunner` 负责调度
 - `Systems` 负责具体执行逻辑
 
-### 三个最重要的数据载体
+### 🗂️ 三个最重要的数据载体
 
 很多人第一次看代码时，最容易混淆的是这三个类型：
 
@@ -304,7 +365,7 @@ flowchart LR
 - **导出传的是 `SceneBlueprintData`**
 - **运行时真正跑的是 `BlueprintFrame`**
 
-### 项目分离架构
+### 🔀 项目分离架构
 
 如果项目要拆成“制作工程”和“运行时工程”，推荐按下面这个粗粒度理解：
 
@@ -343,7 +404,7 @@ flowchart LR
 - 运行时工程消费的是“契约”和“导出数据”
 - 两边可以协作，但不必写在同一个项目里
 
-### 几个容易漏掉但很关键的概念
+### 🔑 几个容易漏掉但很关键的概念
 
 除了上面的主链路，代码里还有几组很重要、但第一次看 README 容易忽略的概念：
 
@@ -378,6 +439,9 @@ flowchart LR
 - 项目级配置中心
 - 专项节点工作台
 - 知识库与 AI 辅助
+
+<details>
+<summary><strong>展开查看五层解释架构的实现细节</strong></summary>
 
 ### 第 1 层：声明层
 
@@ -500,7 +564,9 @@ flowchart LR
 - `Editor/SceneBlueprintWindow.cs`
 - `Editor/Session/BlueprintEditorSession.cs`
 
-### 怎么阅读这个仓库
+</details>
+
+### 👀 怎么阅读这个仓库
 
 第一次进入代码库，建议按这个顺序看：
 
@@ -511,23 +577,65 @@ flowchart LR
 5. 再看 `Runtime/Interpreter/BlueprintLoader.cs` 和 `Runtime/Interpreter/BlueprintRunner.cs`
 6. 最后再看 `Tools~/SbdefGen/`
 
-## 关键入口
+## 🚪 关键入口
 
-- 编辑器主窗口：`Editor/SceneBlueprintWindow.cs`
-- 编辑器会话：`Editor/Session/BlueprintEditorSession.cs`
-- 导出入口：`Editor/Export/BlueprintExporter.cs`
-- DSL 导入与触发：`Editor/CodeGen/Sbdef/SbdefAssetImporter.cs`
-- DSL 代码生成入口：`Editor/CodeGen/Sbdef/SbdefCodeGen.cs`
-- DSL CLI 主程序：`Tools~/SbdefGen/Program.cs`
-- 运行时装载：`Runtime/Interpreter/BlueprintLoader.cs`
-- 运行时调度：`Runtime/Interpreter/BlueprintRunner.cs`
-- 蓝图资产：`Runtime/BlueprintAsset.cs`
+<table>
+  <tr>
+    <td width="33%" valign="top">
+      <strong>🛠️ Editor</strong><br/><br/>
+      <code>Editor/SceneBlueprintWindow.cs</code><br/>
+      编辑器主窗口<br/><br/>
+      <code>Editor/Session/BlueprintEditorSession.cs</code><br/>
+      编辑器会话与状态组织<br/><br/>
+      <code>Editor/Export/BlueprintExporter.cs</code><br/>
+      导出入口
+    </td>
+    <td width="33%" valign="top">
+      <strong>🧾 DSL</strong><br/><br/>
+      <code>Editor/CodeGen/Sbdef/SbdefAssetImporter.cs</code><br/>
+      DSL 导入与触发<br/><br/>
+      <code>Editor/CodeGen/Sbdef/SbdefCodeGen.cs</code><br/>
+      Unity 内代码生成编排入口<br/><br/>
+      <code>Tools~/SbdefGen/Program.cs</code><br/>
+      外部 CLI 主程序
+    </td>
+    <td width="33%" valign="top">
+      <strong>▶️ Runtime</strong><br/><br/>
+      <code>Runtime/BlueprintAsset.cs</code><br/>
+      蓝图资产<br/><br/>
+      <code>Runtime/Interpreter/BlueprintLoader.cs</code><br/>
+      运行时装载入口<br/><br/>
+      <code>Runtime/Interpreter/BlueprintRunner.cs</code><br/>
+      运行时调度入口
+    </td>
+  </tr>
+</table>
 
-## 语法高亮
+## 📚 进一步文档
+
+如果你已经读完 README，接下来推荐这样继续：
+
+- 先看 DSL 设计文档，理解 `.sbdef` 的正式声明方式
+- 再看语法高亮扩展，方便在编辑器里直接阅读和维护 DSL
+- 如果要接业务层，再结合用户工程里的 `SceneBlueprintUser` 结构一起对照阅读
+
+## 🎨 语法高亮
 
 `Documentation~/vscode-sbdef/` 目录中包含 `.sbdef` 的 TextMate 语法高亮扩展，安装方式见 [`Documentation~/vscode-sbdef/README.md`](Documentation~/vscode-sbdef/README.md)。
 
-## 文档
+## 📄 文档
 
-- DSL 设计文档：[`Documentation~/SbdefDSL-Design.md`](Documentation~/SbdefDSL-Design.md)
-- VS Code / Windsurf 语法高亮：[`Documentation~/vscode-sbdef/README.md`](Documentation~/vscode-sbdef/README.md)
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <strong>🧾 DSL 设计文档</strong><br/><br/>
+      <a href="Documentation~/SbdefDSL-Design.md"><code>Documentation~/SbdefDSL-Design.md</code></a><br/>
+      适合想理解 <code>.sbdef</code> 语法、生成链路和设计边界的人继续阅读。
+    </td>
+    <td width="50%" valign="top">
+      <strong>🎨 VS Code / Windsurf 语法高亮</strong><br/><br/>
+      <a href="Documentation~/vscode-sbdef/README.md"><code>Documentation~/vscode-sbdef/README.md</code></a><br/>
+      适合准备正式维护 DSL 文件、需要更顺手编辑体验的人继续配置。
+    </td>
+  </tr>
+</table>
