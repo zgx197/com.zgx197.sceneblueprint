@@ -1,8 +1,8 @@
 #nullable enable
 using System;
 using System.Collections.Generic;
-using System.Globalization;
 using System.Linq;
+using System.Reflection;
 using NodeGraph.Core;
 using SceneBlueprint.Core;
 using SceneBlueprint.Contract;
@@ -36,6 +36,12 @@ namespace SceneBlueprint.Editor.Export
         {
             /// <summary>空间适配器类型标识（C2 默认 Unity3D）。</summary>
             public string AdapterType = "Unity3D";
+
+            /// <summary>
+            /// 业务侧自定义数据（由调用方填入，框架层透传给 IExportEnricher）。
+            /// <para>例如 <c>UserData["levelId"] = 31</c>。</para>
+            /// </summary>
+            public Dictionary<string, object> UserData = new();
         }
 
         /// <summary>
@@ -120,9 +126,22 @@ namespace SceneBlueprint.Editor.Export
             // ── Step 3.5: 收集 Annotation 数据（后处理）──
             EnrichBindingsWithAnnotations(actions, registry, messages);
 
+            // ── Step 3.7: 执行导出后处理扩展（IExportEnricher 自动发现）──
+            var transportMetadata = new List<PropertyValue>();
+            var preAssemblyData = new SceneBlueprintData
+            {
+                BlueprintId = blueprintId ?? graph.Id,
+                BlueprintName = blueprintName ?? "",
+                Actions = actions.ToArray(),
+                Transitions = transitions.ToArray(),
+            };
+            RunEnrichers(preAssemblyData, registry, messages, exportOptions);
+            transportMetadata.AddRange(SceneBlueprintTransportMetadataUtility.Read(preAssemblyData));
+
             // ── Step 4: 组装 ──
             var allVariables = MergeVariables(variables, graph, registry);
             var dataConnections = ExportDataConnections(graph, boundaryNodeIds, registry);
+            var actionTypeInfos = CollectActionTypeInfos(actions, registry);
             var data = new SceneBlueprintData
             {
                 BlueprintId = blueprintId ?? graph.Id,
@@ -132,7 +151,9 @@ namespace SceneBlueprint.Editor.Export
                 Actions = actions.ToArray(),
                 Transitions = transitions.ToArray(),
                 Variables = allVariables,
-                DataConnections = dataConnections
+                DataConnections = dataConnections,
+                Metadata = transportMetadata.ToArray(),
+                ActionTypeInfos = actionTypeInfos
             };
 
             return new ExportResult(data, messages);
@@ -167,34 +188,48 @@ namespace SceneBlueprint.Editor.Export
             {
                 var properties = new List<PropertyValue>();
                 var sceneBindings = new List<SceneBindingEntry>();
+                var missingKeys = new List<string>();
+                var declaredBindings = SceneBindingDeclarationSupport.CollectDeclaredBindings(def, nodeData.Properties);
+
+                for (var index = 0; index < declaredBindings.Count; index++)
+                {
+                    var binding = declaredBindings[index];
+                    sceneBindings.Add(new SceneBindingEntry
+                    {
+                        BindingKey = binding.BindingKey,
+                        BindingType = binding.BindingType,
+                        // 节点属性里的值通常是业务侧标识（如 MarkerId），
+                        // C2 起同时作为稳定 ID 回退值。
+                        SceneObjectId = binding.RawValue,
+                        StableObjectId = binding.RawValue,
+                        AdapterType = options.AdapterType,
+                        SpatialPayloadJson = "{}"
+                    });
+                }
 
                 foreach (var prop in def.Properties)
                 {
                     if (prop.Type == PropertyType.SceneBinding)
                     {
-                        // SceneBinding 提升为独立条目
-                        var value = nodeData.Properties.Get<string>(prop.Key) ?? "";
-                        if (!string.IsNullOrEmpty(value))
-                        {
-                            sceneBindings.Add(new SceneBindingEntry
-                            {
-                                BindingKey = prop.Key,
-                                BindingType = prop.SceneBindingType?.ToString() ?? "Transform",
-                                // 节点属性里的值通常是业务侧标识（如 MarkerId），
-                                // C2 起同时作为稳定 ID 回退值。
-                                SceneObjectId = value,
-                                StableObjectId = value,
-                                AdapterType = options.AdapterType,
-                                SpatialPayloadJson = "{}"
-                            });
-                        }
+                        // SceneBinding 已通过 declaration helper 统一收口。
+                        continue;
                     }
+
+                    var pv = ExportPropertyValue(prop, nodeData.Properties);
+                    if (pv != null)
+                        properties.Add(pv);
                     else
-                    {
-                        var pv = ExportPropertyValue(prop, nodeData.Properties);
-                        if (pv != null)
-                            properties.Add(pv);
-                    }
+                        missingKeys.Add(prop.Key);
+                }
+
+                // 属性缺失检测：旧节点可能缺少新增的配置属性
+                if (missingKeys.Count > 0)
+                {
+                    var displayName = def.DisplayName ?? nodeData.ActionTypeId;
+                    var keyList = string.Join(", ", missingKeys);
+                    messages.Add(ValidationMessage.Error(
+                        $"节点 [{displayName}]（ID: {node.Id}）缺少以下属性: {keyList}。" +
+                        $"该节点可能是在属性定义更新前创建的，请删除该节点并重新创建。"));
                 }
 
                 entry.Properties = properties.ToArray();
@@ -228,38 +263,12 @@ namespace SceneBlueprint.Editor.Export
         private static PropertyValue? ExportPropertyValue(
             PropertyDefinition prop, PropertyBag bag)
         {
-            var raw = bag.GetRaw(prop.Key);
-            if (raw == null) return null;
-
-            string valueType = PropertyTypeToString(prop.Type);
-            string value = SerializePropertyValue(prop.Type, raw);
-
-            return new PropertyValue
-            {
-                Key = prop.Key,
-                ValueType = valueType,
-                Value = value
-            };
-        }
-
-        private static string PropertyTypeToString(PropertyType type)
-        {
-            return type switch
-            {
-                PropertyType.Float => "float",
-                PropertyType.Int => "int",
-                PropertyType.Bool => "bool",
-                PropertyType.String => "string",
-                PropertyType.Enum => "enum",
-                PropertyType.AssetRef => "assetRef",
-                PropertyType.Vector2 => "vector2",
-                PropertyType.Vector3 => "vector3",
-                PropertyType.Color => "color",
-                PropertyType.Tag => "tag",
-                PropertyType.StructList => "json",
-                PropertyType.VariableSelector => "int",
-                _ => "string"
-            };
+            return PropertyDefinitionValueUtility.TryCreateSerializedPropertyValue(
+                prop,
+                bag.GetRaw(prop.Key),
+                out var propertyValue)
+                ? propertyValue
+                : null;
         }
 
         /// <summary>
@@ -269,51 +278,7 @@ namespace SceneBlueprint.Editor.Export
         private static VariableDeclaration[] MergeVariables(
             VariableDeclaration[]? userVars, Graph graph, ActionRegistry registry)
         {
-            var result = new List<VariableDeclaration>(userVars ?? Array.Empty<VariableDeclaration>());
-            var seen = new HashSet<string>(result.Select(v => v.Name));
-
-            foreach (var node in graph.Nodes)
-            {
-                if (node.UserData is not ActionNodeData data) continue;
-                if (!registry.TryGet(data.ActionTypeId, out var def)) continue;
-
-                foreach (var outVar in def.OutputVariables)
-                {
-                    if (seen.Contains(outVar.Name)) continue;
-                    seen.Add(outVar.Name);
-                    result.Add(new VariableDeclaration
-                    {
-                        Index        = NodeOutputVarIndex(outVar.Name),
-                        Name         = outVar.Name,
-                        Type         = outVar.Type,
-                        Scope        = outVar.Scope,
-                        InitialValue = ""
-                    });
-                }
-            }
-
-            return result.ToArray();
-        }
-
-        /// <summary>DJB2 hash of name → 10000–19999（与编辑器端计算逻辑一致）。</summary>
-        private static int NodeOutputVarIndex(string name)
-        {
-            uint h = 5381;
-            foreach (char c in name) h = ((h << 5) + h) + c;
-            return 10000 + (int)(h % 10000);
-        }
-
-        private static string SerializePropertyValue(PropertyType type, object value)
-        {
-            return type switch
-            {
-                PropertyType.Float => Convert.ToSingle(value).ToString("G", CultureInfo.InvariantCulture),
-                PropertyType.Int => Convert.ToInt32(value).ToString(CultureInfo.InvariantCulture),
-                PropertyType.Bool => Convert.ToBoolean(value) ? "true" : "false",
-                PropertyType.StructList => value.ToString() ?? "[]",
-                PropertyType.VariableSelector => Convert.ToInt32(value).ToString(CultureInfo.InvariantCulture),
-                _ => value.ToString() ?? ""
-            };
+            return OutputVariableDeclarationSupport.MergeDeclaredOutputVariables(userVars, graph, registry);
         }
 
         // ══════════════════════════════════════
@@ -718,6 +683,48 @@ namespace SceneBlueprint.Editor.Export
             };
         }
 
+        // ══════════════════════════════════════
+        //  节点类型描述收集
+        // ══════════════════════════════════════
+
+        /// <summary>
+        /// 从 actions 中收集出现过的 TypeId，查询 ActionRegistry 获取显示名、分类和端口信息。
+        /// </summary>
+        private static ActionTypeInfo[] CollectActionTypeInfos(
+            List<ActionEntry> actions, ActionRegistry registry)
+        {
+            var seenTypeIds = new HashSet<string>();
+            var result = new List<ActionTypeInfo>();
+
+            foreach (var action in actions)
+            {
+                if (string.IsNullOrEmpty(action.TypeId)) continue;
+                if (!seenTypeIds.Add(action.TypeId)) continue;
+
+                if (!registry.TryGet(action.TypeId, out var def)) continue;
+
+                var ports = new List<ActionPortInfo>();
+                foreach (var port in def.Ports)
+                {
+                    ports.Add(new ActionPortInfo
+                    {
+                        Id = port.Id,
+                        DisplayName = port.DisplayName
+                    });
+                }
+
+                result.Add(new ActionTypeInfo
+                {
+                    TypeId = def.TypeId,
+                    DisplayName = def.DisplayName,
+                    Category = CategoryRegistry.GetDisplayName(def.Category),
+                    Ports = ports.ToArray()
+                });
+            }
+
+            return result.ToArray();
+        }
+
         /// <summary>
         /// 为 Flow.Join 节点计算入边数并添加到属性中。
         /// <para>
@@ -764,6 +771,103 @@ namespace SceneBlueprint.Editor.Export
                         $"Flow.Join 节点 '{action.Id}' 没有入边，将永远不会被激活"));
                 }
             }
+        }
+
+        // ══════════════════════════════════════
+        //  导出后处理扩展（IExportEnricher 自动发现）
+        // ══════════════════════════════════════
+
+        /// <summary>
+        /// 自动发现所有标注了 <see cref="ExportEnricherAttribute"/> 的 <see cref="IExportEnricher"/> 实现，
+        /// 按 Order 升序排列后返回实例列表。
+        /// <para>
+        /// 发现策略与 <see cref="ActionRegistry.AutoDiscover()"/> 一致：
+        /// 遍历所有已加载程序集，跳过系统程序集，查找带特性的非抽象类。
+        /// </para>
+        /// </summary>
+        private static List<IExportEnricher> DiscoverEnrichers()
+        {
+            var enricherType = typeof(IExportEnricher);
+            var candidates = new List<(IExportEnricher instance, int order)>();
+
+            foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                var assemblyName = assembly.GetName().Name ?? "";
+                if (assemblyName.StartsWith("System") || assemblyName.StartsWith("Microsoft")
+                    || assemblyName.StartsWith("mscorlib") || assemblyName.StartsWith("netstandard"))
+                    continue;
+
+                Type[] types;
+                try { types = assembly.GetTypes(); }
+                catch (ReflectionTypeLoadException ex)
+                { types = ex.Types.Where(t => t != null).ToArray()!; }
+
+                foreach (var type in types)
+                {
+                    if (type == null || type.IsAbstract || type.IsInterface) continue;
+                    if (!enricherType.IsAssignableFrom(type)) continue;
+
+                    var attr = type.GetCustomAttribute<ExportEnricherAttribute>();
+                    if (attr == null) continue;
+
+                    try
+                    {
+                        var instance = (IExportEnricher)Activator.CreateInstance(type)!;
+                        candidates.Add((instance, attr.Order));
+                    }
+                    catch (Exception ex)
+                    {
+                        UnityEngine.Debug.LogWarning(
+                            $"[BlueprintExporter] ExportEnricher 实例化失败: {type.FullName} - {ex.Message}");
+                    }
+                }
+            }
+
+            candidates.Sort((a, b) => a.order.CompareTo(b.order));
+            return candidates.Select(c => c.instance).ToList();
+        }
+
+        /// <summary>
+        /// 执行所有自动发现的 <see cref="IExportEnricher"/>。
+        /// 每个 Enricher 可向 <paramref name="data"/> 的 transport metadata 运输壳追加条目。
+        /// </summary>
+        private static void RunEnrichers(
+            SceneBlueprintData data,
+            ActionRegistry registry,
+            List<ValidationMessage> messages,
+            ExportOptions exportOptions)
+        {
+            var enrichers = DiscoverEnrichers();
+            if (enrichers.Count == 0) return;
+
+            // 收集所有 enricher 写入的 transport metadata
+            var allTransportMetadata = new List<PropertyValue>(SceneBlueprintTransportMetadataUtility.Read(data));
+
+            foreach (var enricher in enrichers)
+            {
+                try
+                {
+                    // 每次调用前清空 transport metadata，让 enricher 写入自己的条目
+                    SceneBlueprintTransportMetadataUtility.Clear(data);
+
+                    var context = new ExportContext(data, registry, messages, exportOptions.UserData);
+                    enricher.Enrich(context);
+
+                    // 收集此 enricher 写入的 transport metadata
+                    var enricherTransportMetadata = context.TransportMetadata;
+                    if (enricherTransportMetadata.Length > 0)
+                    {
+                        allTransportMetadata.AddRange(enricherTransportMetadata);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    messages.Add(ValidationMessage.Warning(
+                        $"ExportEnricher '{enricher.GetType().Name}' 执行异常: {ex.Message}"));
+                }
+            }
+
+            SceneBlueprintTransportMetadataUtility.Replace(data, allTransportMetadata.ToArray());
         }
 
     }

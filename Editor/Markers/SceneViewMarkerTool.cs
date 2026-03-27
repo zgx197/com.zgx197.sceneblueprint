@@ -33,38 +33,12 @@ namespace SceneBlueprint.Editor.Markers
         // ─── 状态 ───
 
         private static bool _enabled;
-        private static bool _createInputDrivenByTool;
         private static IActionRegistry? _registry;
         private static Vector3 _lastRightClickWorldPos;
         private static IEditorSpatialModeDescriptor? _spatialMode;
 
         /// <summary>当前是否已启用标记创建工具。</summary>
         public static bool IsEnabled => _enabled;
-
-        /// <summary>
-        /// 设置创建输入来源。
-        /// false = 使用 legacy duringSceneGui 路由；
-        /// true  = 使用 MarkerSelectTool.OnToolGUI 路由（P2）。
-        /// </summary>
-        public static void SetCreateInputDrivenByTool(bool drivenByTool)
-        {
-            if (_createInputDrivenByTool == drivenByTool)
-                return;
-
-            UnityEngine.Debug.Log($"[SceneViewMarkerTool] SetCreateInputDrivenByTool: {_createInputDrivenByTool} → {drivenByTool}, enabled={_enabled}");
-            _createInputDrivenByTool = drivenByTool;
-
-            if (!_enabled)
-                return;
-
-            if (_createInputDrivenByTool)
-                SceneView.duringSceneGui -= OnSceneGUI;
-            else
-            {
-                SceneView.duringSceneGui -= OnSceneGUI;
-                SceneView.duringSceneGui += OnSceneGUI;
-            }
-        }
 
         // ─── 启用/禁用 ───
 
@@ -81,21 +55,15 @@ namespace SceneBlueprint.Editor.Markers
             _spatialMode = spatialMode ?? throw new System.ArgumentNullException(nameof(spatialMode));
             if (_enabled)
             {
-                UnityEngine.Debug.Log($"[SceneViewMarkerTool] Enable 跳过（已启用）, drivenByTool={_createInputDrivenByTool}");
+                UnityEngine.Debug.Log("[SceneViewMarkerTool] Enable 跳过（已启用）");
                 return;
             }
             _enabled = true;
 
-            if (!_createInputDrivenByTool)
-            {
-                SceneView.duringSceneGui -= OnSceneGUI;
-                SceneView.duringSceneGui += OnSceneGUI;
-                UnityEngine.Debug.Log("[SceneViewMarkerTool] Enable → 注册 duringSceneGui 回调");
-            }
-            else
-            {
-                UnityEngine.Debug.Log("[SceneViewMarkerTool] Enable → drivenByTool=true，不注册 duringSceneGui");
-            }
+            // 创建路由始终走 duringSceneGui，不依赖 EditorTool 是否活跃
+            SceneView.duringSceneGui -= OnSceneGUI;
+            SceneView.duringSceneGui += OnSceneGUI;
+            UnityEngine.Debug.Log("[SceneViewMarkerTool] Enable → 注册 duringSceneGui 回调");
         }
 
         /// <summary>
@@ -112,28 +80,11 @@ namespace SceneBlueprint.Editor.Markers
             UnityEngine.Debug.Log("[SceneViewMarkerTool] Disable → 已禁用并移除回调");
         }
 
-        /// <summary>
-        /// 由 MarkerSelectTool 转发的创建输入入口（P2）。
-        /// </summary>
-        public static void HandleCreateFromTool(Event evt, SceneView sceneView)
-        {
-            if (!_createInputDrivenByTool)
-                return;
-
-            if (!_enabled || _registry == null || _spatialMode == null)
-                return;
-
-            HandleCreateEvent(evt, sceneView);
-        }
-
         // ─── Scene View 事件处理 ───
 
         private static void OnSceneGUI(SceneView sceneView)
         {
             if (!_enabled || _registry == null || _spatialMode == null) return;
-
-            if (_createInputDrivenByTool)
-                return;
 
             HandleCreateEvent(Event.current, sceneView);
         }

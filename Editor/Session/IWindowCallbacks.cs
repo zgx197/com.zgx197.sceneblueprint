@@ -1,6 +1,5 @@
 #nullable enable
 using UnityEngine;
-using SceneBlueprint.Runtime;
 
 namespace SceneBlueprint.Editor.Session
 {

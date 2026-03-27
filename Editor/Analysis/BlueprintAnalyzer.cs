@@ -1,6 +1,7 @@
 #nullable enable
 using System.Collections.Generic;
 using NodeGraph.Core;
+using SceneBlueprint.Contract;
 using SceneBlueprint.Core;
 
 namespace SceneBlueprint.Editor.Analysis
@@ -39,9 +40,11 @@ namespace SceneBlueprint.Editor.Analysis
         /// 对 graph 执行所有已注册规则，返回分析报告。
         /// 规则按注册顺序依次执行，前序规则写入的 ctx 缓存（如 ReachableNodeIds）可被后续规则复用。
         /// </summary>
-        public AnalysisReport Analyze(Graph graph)
+        public AnalysisReport Analyze(
+            Graph graph,
+            IReadOnlyList<VariableDeclaration>? variables = null)
         {
-            var ctx = new AnalysisContext(graph, _typeProvider, _actionRegistry);
+            var ctx = new AnalysisContext(graph, _typeProvider, _actionRegistry, variables);
             var diagnostics = new List<Diagnostic>();
 
             foreach (var rule in _rules)

@@ -47,7 +47,6 @@ namespace SceneBlueprint.Editor.Markers
             }
 
             MarkerSelectTool.SetEnabled(false);
-            SceneViewMarkerTool.SetCreateInputDrivenByTool(false);
             GizmoRenderPipeline.SetSelectionInputDrivenByTool(false);
 
             SBLog.Info(SBLogTags.Selection, "SceneBlueprintToolContext.Detach => reset all tool routes");
@@ -89,13 +88,11 @@ namespace SceneBlueprint.Editor.Markers
             if (_useEditorToolSelectionInput)
             {
                 MarkerSelectTool.SetEnabled(true);
-                SceneViewMarkerTool.SetCreateInputDrivenByTool(true);
                 MarkerSelectTool.ActivateIfEnabled();
             }
             else
             {
                 MarkerSelectTool.SetEnabled(false);
-                SceneViewMarkerTool.SetCreateInputDrivenByTool(false);
                 GizmoRenderPipeline.SetSelectionInputDrivenByTool(false);
             }
 

@@ -67,6 +67,7 @@ namespace SceneBlueprint.Editor.Logging
                 SBLogTags.Validator,
                 SBLogTags.Export,
                 SBLogTags.Layer,
+                SBLogTags.Snapshot,
             };
         }
 

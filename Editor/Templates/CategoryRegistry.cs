@@ -22,15 +22,25 @@ namespace SceneBlueprint.Editor.Templates
         // 硬编码的中文名映射表（无 CategorySO 时的后备方案）
         private static readonly Dictionary<string, string> _fallbackDisplayNames = new()
         {
+            { "Blackboard", "黑板" },
             { "Flow", "流程控制" },
+            { "Interaction", "交互" },
+            { "Signal", "信号" },
             { "Spawn", "刷怪" },
             { "Monster", "怪物" },
             { "Location", "位置" },
             { "Condition", "条件" },
             { "Behavior", "行为" },
             { "VFX", "视觉效果" },
+            { "Vfx", "视觉效果" },
             { "Trigger", "触发器" },
             { "Proxy", "代理" }
+        };
+
+        private static readonly Dictionary<string, string> _englishDisplayNames = new()
+        {
+            { "VFX", "Visual Effects" },
+            { "Vfx", "Visual Effects" }
         };
 
         /// <summary>标记缓存为脏，下次访问时重新加载</summary>
@@ -80,6 +90,33 @@ namespace SceneBlueprint.Editor.Templates
         }
 
         /// <summary>
+        /// 获取用于编辑器菜单显示的双语分类标题。
+        /// <para>
+        /// 菜单层优先展示“中文（英文）”的双语标签，既保留团队习惯的中文语义，
+        /// 也保留契约层常见的英文 CategoryId，避免菜单和定义层脱节。
+        /// </para>
+        /// </summary>
+        public static string GetMenuDisplayName(string categoryId)
+        {
+            if (string.IsNullOrEmpty(categoryId))
+                return "未分类 (Uncategorized)";
+
+            var localized = GetDisplayName(categoryId);
+            var english = GetEnglishDisplayName(categoryId);
+
+            if (string.IsNullOrWhiteSpace(localized))
+                return english;
+
+            if (string.Equals(localized, english, System.StringComparison.OrdinalIgnoreCase))
+                return localized;
+
+            if (localized.Contains(english, System.StringComparison.OrdinalIgnoreCase))
+                return localized;
+
+            return $"{localized} ({english})";
+        }
+
+        /// <summary>
         /// 获取分类的主题色。有 SO 时使用 ThemeColor，无 SO 时返回 null。
         /// </summary>
         public static UnityEngine.Color? GetThemeColor(string categoryId)
@@ -120,6 +157,17 @@ namespace SceneBlueprint.Editor.Templates
             }
 
             SBLog.Debug(SBLogTags.Template, $"CategoryRegistry: 加载 {_cache.Count} 个分类");
+        }
+
+        private static string GetEnglishDisplayName(string categoryId)
+        {
+            if (string.IsNullOrEmpty(categoryId))
+                return "Uncategorized";
+
+            if (_englishDisplayNames.TryGetValue(categoryId, out var englishDisplayName))
+                return englishDisplayName;
+
+            return categoryId;
         }
     }
 }

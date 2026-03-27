@@ -8,6 +8,7 @@ using NodeGraph.Core;
 using NodeGraph.Unity;
 using SceneBlueprint.Core;
 using SceneBlueprint.Contract;
+using SceneBlueprint.Editor.Drawers;
 using SceneBlueprint.Editor.Logging;
 using SceneBlueprint.Editor.Markers;
 using SceneBlueprint.Runtime.Markers;
@@ -28,9 +29,14 @@ namespace SceneBlueprint.Editor
         private Graph? _currentGraph;
         private IActionRegistry? _actionRegistry;
         private BindingContext? _bindingContext;
+        private ITagDimensionRegistry? _tagDimensionRegistry;
+        private string[]? _signalTags;
         private VariableDeclaration[] _variables = System.Array.Empty<VariableDeclaration>();
         private string[] _variableDisplayNames = new[] { "(未选择)" };
         private int[] _variableIndices = new[] { -1 };
+        private readonly List<IActionInspectorSection> _inspectorSections;
+        private readonly List<IActionInspectorOverride> _inspectorOverrides;
+        private readonly Dictionary<string, bool> _advancedSectionFoldouts = new Dictionary<string, bool>(StringComparer.Ordinal);
 
         /// <summary>属性修改回调（nodeId, nodeData）</summary>
         public System.Action<string, ActionNodeData>? OnPropertyChanged;
@@ -38,6 +44,8 @@ namespace SceneBlueprint.Editor
         public ActionNodeInspectorDrawer(ActionRegistry actionRegistry)
         {
             _actionRegistry = actionRegistry;
+            _inspectorSections = DiscoverInspectorSections();
+            _inspectorOverrides = DiscoverInspectorOverrides();
         }
 
         /// <summary>设置场景绑定上下文（由编辑器窗口管理生命周期）</summary>
@@ -69,6 +77,18 @@ namespace SceneBlueprint.Editor
                     _variableIndices[i + 1]      = v.Index;
                 }
             }
+        }
+
+        /// <summary>设置 Tag 维度注册表（由编辑器窗口在初始化时注入）</summary>
+        public void SetTagDimensionRegistry(ITagDimensionRegistry? registry)
+        {
+            _tagDimensionRegistry = registry;
+        }
+
+        /// <summary>设置可选的信号标签列表（由编辑器窗口从 codegen 产物收集后注入）</summary>
+        public void SetSignalTags(string[]? signalTags)
+        {
+            _signalTags = signalTags;
         }
 
         /// <summary>设置当前 Graph 引用（用于子蓝图 Inspector 和关卡总览）</summary>
@@ -236,6 +256,20 @@ namespace SceneBlueprint.Editor
             }
 
             bool changed = false;
+            IActionInspectorOverride? inspectorOverride = null;
+            ActionInspectorOverrideContext? overrideContext = null;
+            if (_actionRegistry != null)
+            {
+                overrideContext = new ActionInspectorOverrideContext(
+                    node,
+                    _currentGraph,
+                    def,
+                    data,
+                    _actionRegistry,
+                    _bindingContext,
+                    _variables);
+                inspectorOverride = ResolveInspectorOverride(overrideContext.Value);
+            }
 
             // ── 节点信息头 ──
             EditorGUILayout.LabelField("类型", def.DisplayName);
@@ -246,52 +280,326 @@ namespace SceneBlueprint.Editor
             // ── DataIn 端口连接信息（如果存在 DataIn 端口）──
             DrawDataInConnections(node, def);
 
-            // ── 普通属性 ──
-            bool hasSceneBindings = false;
-            foreach (var prop in def.Properties)
+            var connectedPortSemanticIds = ResolveConnectedPortSemanticIds(node);
+            if (DrawDefinitionDrivenPropertyLayout(
+                    node,
+                    def,
+                    data,
+                    inspectorOverride,
+                    connectedPortSemanticIds))
             {
-                if (!string.IsNullOrEmpty(prop.VisibleWhen))
-                {
-                    if (!VisibleWhenEvaluator.Evaluate(prop.VisibleWhen, data.Properties))
-                        continue;
-                }
+                changed = true;
+            }
 
-                // SceneBinding 属性单独分组，先跳过
-                if (prop.Type == PropertyType.SceneBinding)
-                {
-                    hasSceneBindings = true;
-                    continue;
-                }
-
-                if (DrawPropertyField(prop, data.Properties, node.Id))
+            if (_actionRegistry != null)
+            {
+                var sectionContext = new ActionInspectorSectionContext(
+                    node,
+                    _currentGraph,
+                    def,
+                    data,
+                    _actionRegistry,
+                    _bindingContext,
+                    ResolveSuppressDefinitionMetadataSection(inspectorOverride, overrideContext),
+                    ResolveSuppressDefinitionValidationSection(inspectorOverride, overrideContext),
+                    ResolveSuppressDefaultCompilationSection(inspectorOverride, overrideContext),
+                    _variables);
+                if (DrawInspectorSections(sectionContext))
                 {
                     changed = true;
-                    // 刷新预览（由调用方处理）
                     OnPropertyChanged?.Invoke(node.Id, data);
                 }
             }
 
-            // ── 场景绑定区（分组显示）──
-            if (hasSceneBindings)
+            return changed;
+        }
+
+        private bool DrawInspectorSections(ActionInspectorSectionContext context)
+        {
+            if (_inspectorSections.Count == 0)
             {
-                EditorGUILayout.Space(8);
-                EditorGUILayout.LabelField("── 场景绑定 ──", EditorStyles.boldLabel);
+                return false;
+            }
 
-                foreach (var prop in def.Properties)
+            var changed = false;
+            for (var index = 0; index < _inspectorSections.Count; index++)
+            {
+                var section = _inspectorSections[index];
+                try
                 {
-                    if (prop.Type != PropertyType.SceneBinding) continue;
-
-                    if (!string.IsNullOrEmpty(prop.VisibleWhen))
+                    if (!section.Supports(context))
                     {
-                        if (!VisibleWhenEvaluator.Evaluate(prop.VisibleWhen, data.Properties))
-                            continue;
+                        continue;
                     }
 
-                    if (DrawPropertyField(prop, data.Properties, node.Id))
+                    if (section.Draw(context))
                     {
                         changed = true;
-                        // 刷新预览（由调用方处理）
-                        OnPropertyChanged?.Invoke(node.Id, data);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    UnityEngine.Debug.LogWarning($"[ActionNodeInspectorDrawer] Inspector section 执行失败: {section.GetType().FullName} - {ex.Message}");
+                }
+            }
+
+            return changed;
+        }
+
+        private static bool ResolveSuppressDefaultCompilationSection(
+            IActionInspectorOverride? inspectorOverride,
+            ActionInspectorOverrideContext? overrideContext)
+        {
+            if (inspectorOverride == null)
+            {
+                return false;
+            }
+
+            if (overrideContext.HasValue
+                && inspectorOverride is IActionInspectorOverrideMetadataResolver metadataResolver)
+            {
+                return metadataResolver.SuppressDefaultCompilationSection(overrideContext.Value);
+            }
+
+            return inspectorOverride is IActionInspectorOverrideMetadata metadata
+                && metadata.SuppressDefaultCompilationSection;
+        }
+
+        private static bool ResolveSuppressDefinitionMetadataSection(
+            IActionInspectorOverride? inspectorOverride,
+            ActionInspectorOverrideContext? overrideContext)
+        {
+            if (inspectorOverride == null)
+            {
+                return false;
+            }
+
+            if (overrideContext.HasValue
+                && inspectorOverride is IActionInspectorOverrideMetadataResolver metadataResolver)
+            {
+                return metadataResolver.SuppressDefinitionMetadataSection(overrideContext.Value);
+            }
+
+            return inspectorOverride is IActionInspectorOverrideMetadata metadata
+                && metadata.SuppressDefinitionMetadataSection;
+        }
+
+        private static bool ResolveSuppressDefinitionValidationSection(
+            IActionInspectorOverride? inspectorOverride,
+            ActionInspectorOverrideContext? overrideContext)
+        {
+            if (inspectorOverride == null)
+            {
+                return false;
+            }
+
+            if (overrideContext.HasValue
+                && inspectorOverride is IActionInspectorOverrideMetadataResolver metadataResolver)
+            {
+                return metadataResolver.SuppressDefinitionValidationSection(overrideContext.Value);
+            }
+
+            return inspectorOverride is IActionInspectorOverrideMetadata metadata
+                && metadata.SuppressDefinitionValidationSection;
+        }
+
+        private static List<IActionInspectorSection> DiscoverInspectorSections()
+        {
+            var sections = new List<(IActionInspectorSection instance, int order)>();
+            foreach (var type in TypeCache.GetTypesDerivedFrom<IActionInspectorSection>())
+            {
+                if (type.IsAbstract || type.IsInterface)
+                {
+                    continue;
+                }
+
+                try
+                {
+                    var instance = (IActionInspectorSection)Activator.CreateInstance(type)!;
+                    var attr = (ActionInspectorSectionAttribute?)Attribute.GetCustomAttribute(
+                        type,
+                        typeof(ActionInspectorSectionAttribute));
+                    sections.Add((instance, attr?.Order ?? 0));
+                }
+                catch (Exception ex)
+                {
+                    UnityEngine.Debug.LogWarning($"[ActionNodeInspectorDrawer] Inspector section 实例化失败: {type.FullName} - {ex.Message}");
+                }
+            }
+
+            sections.Sort(static (left, right) =>
+            {
+                var orderCompare = left.order.CompareTo(right.order);
+                if (orderCompare != 0)
+                {
+                    return orderCompare;
+                }
+
+                return string.CompareOrdinal(
+                    left.instance.GetType().FullName,
+                    right.instance.GetType().FullName);
+            });
+
+            var result = new List<IActionInspectorSection>(sections.Count);
+            for (var index = 0; index < sections.Count; index++)
+            {
+                result.Add(sections[index].instance);
+            }
+
+            return result;
+        }
+
+        private static List<IActionInspectorOverride> DiscoverInspectorOverrides()
+        {
+            var overrides = new List<(IActionInspectorOverride instance, int order)>();
+            foreach (var type in TypeCache.GetTypesDerivedFrom<IActionInspectorOverride>())
+            {
+                if (type.IsAbstract || type.IsInterface)
+                {
+                    continue;
+                }
+
+                try
+                {
+                    var instance = (IActionInspectorOverride)Activator.CreateInstance(type)!;
+                    var attr = (ActionInspectorOverrideAttribute?)Attribute.GetCustomAttribute(
+                        type,
+                        typeof(ActionInspectorOverrideAttribute));
+                    overrides.Add((instance, attr?.Order ?? 0));
+                }
+                catch (Exception ex)
+                {
+                    UnityEngine.Debug.LogWarning($"[ActionNodeInspectorDrawer] Inspector override 实例化失败: {type.FullName} - {ex.Message}");
+                }
+            }
+
+            overrides.Sort(static (left, right) =>
+            {
+                var orderCompare = left.order.CompareTo(right.order);
+                if (orderCompare != 0)
+                {
+                    return orderCompare;
+                }
+
+                return string.CompareOrdinal(
+                    left.instance.GetType().FullName,
+                    right.instance.GetType().FullName);
+            });
+
+            var result = new List<IActionInspectorOverride>(overrides.Count);
+            for (var index = 0; index < overrides.Count; index++)
+            {
+                result.Add(overrides[index].instance);
+            }
+
+            return result;
+        }
+
+        private IActionInspectorOverride? ResolveInspectorOverride(ActionInspectorOverrideContext context)
+        {
+            for (var index = 0; index < _inspectorOverrides.Count; index++)
+            {
+                var inspectorOverride = _inspectorOverrides[index];
+                try
+                {
+                    if (inspectorOverride.Supports(context))
+                    {
+                        return inspectorOverride;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    UnityEngine.Debug.LogWarning($"[ActionNodeInspectorDrawer] Inspector override Supports 失败: {inspectorOverride.GetType().FullName} - {ex.Message}");
+                }
+            }
+
+            return null;
+        }
+
+        private IReadOnlyCollection<string> ResolveConnectedPortSemanticIds(Node node)
+        {
+            if (_currentGraph == null)
+            {
+                return Array.Empty<string>();
+            }
+
+            var result = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var edge in _currentGraph.Edges)
+            {
+                var sourcePort = _currentGraph.FindPort(edge.SourcePortId);
+                var targetPort = _currentGraph.FindPort(edge.TargetPortId);
+                if (sourcePort != null && string.Equals(sourcePort.NodeId, node.Id, StringComparison.Ordinal))
+                {
+                    result.Add(sourcePort.SemanticId);
+                }
+
+                if (targetPort != null && string.Equals(targetPort.NodeId, node.Id, StringComparison.Ordinal))
+                {
+                    result.Add(targetPort.SemanticId);
+                }
+            }
+
+            return result;
+        }
+
+        private bool DrawDefinitionDrivenPropertyLayout(
+            Node ownerNode,
+            ActionDefinition definition,
+            ActionNodeData data,
+            IActionInspectorOverride? inspectorOverride,
+            IReadOnlyCollection<string> connectedPortSemanticIds)
+        {
+            var sections = ActionDefinitionSectionLayoutBuilder.BuildVisibleSections(definition, data.Properties);
+            if (sections.Count == 0)
+            {
+                return false;
+            }
+
+            var changed = false;
+            for (var index = 0; index < sections.Count; index++)
+            {
+                var section = sections[index];
+                if (ShouldDrawSectionHeader(section, sections.Count))
+                {
+                    EditorGUILayout.Space(8);
+                    EditorGUILayout.LabelField(section.Title, EditorStyles.boldLabel);
+                }
+
+                if (DrawPropertyEntries(
+                        section.NormalProperties,
+                        data.Properties,
+                        ownerNode.Id,
+                        inspectorOverride,
+                        ownerNode,
+                        definition,
+                        data,
+                        connectedPortSemanticIds))
+                {
+                    changed = true;
+                }
+
+                if (section.AdvancedProperties.Count > 0)
+                {
+                    var foldoutKey = $"{ownerNode.Id}:{section.Key}:advanced";
+                    _advancedSectionFoldouts.TryGetValue(foldoutKey, out var expanded);
+                    var nextExpanded = EditorGUILayout.Foldout(expanded, "高级 Advanced", true);
+                    _advancedSectionFoldouts[foldoutKey] = nextExpanded;
+                    if (nextExpanded)
+                    {
+                        EditorGUI.indentLevel++;
+                        if (DrawPropertyEntries(
+                                section.AdvancedProperties,
+                                data.Properties,
+                                ownerNode.Id,
+                                inspectorOverride,
+                                ownerNode,
+                                definition,
+                                data,
+                                connectedPortSemanticIds))
+                        {
+                            changed = true;
+                        }
+                        EditorGUI.indentLevel--;
                     }
                 }
             }
@@ -299,10 +607,75 @@ namespace SceneBlueprint.Editor
             return changed;
         }
 
+        private bool DrawPropertyEntries(
+            List<PropertyDefinition> properties,
+            PropertyBag bag,
+            string ownerNodeId,
+            IActionInspectorOverride? inspectorOverride,
+            Node ownerNode,
+            ActionDefinition definition,
+            ActionNodeData data,
+            IReadOnlyCollection<string> connectedPortSemanticIds)
+        {
+            var changed = false;
+            for (var index = 0; index < properties.Count; index++)
+            {
+                var prop = properties[index];
+                if (!DrawPropertyField(prop, bag, ownerNodeId, inspectorOverride, ownerNode, definition, data))
+                {
+                    continue;
+                }
+
+                ActionDefinitionAuthoringSupport.TryApplyPropertyNormalization(
+                    ownerNodeId,
+                    definition,
+                    prop,
+                    bag,
+                    connectedPortSemanticIds,
+                    _variables);
+                changed = true;
+                OnPropertyChanged?.Invoke(ownerNodeId, data);
+            }
+
+            return changed;
+        }
+
+        private static bool ShouldDrawSectionHeader(ActionDefinitionPropertySectionLayout section, int totalSectionCount)
+        {
+            return totalSectionCount > 1 || !section.IsImplicitDefault;
+        }
+
         // ── 属性控件绘制（使用 EditorGUILayout 自动布局）──
 
-        private bool DrawPropertyField(PropertyDefinition prop, PropertyBag bag, string ownerNodeId)
+        private bool DrawPropertyField(
+            PropertyDefinition prop,
+            PropertyBag bag,
+            string ownerNodeId,
+            IActionInspectorOverride? inspectorOverride,
+            Node ownerNode,
+            ActionDefinition definition,
+            ActionNodeData data)
         {
+            if (_actionRegistry != null && inspectorOverride != null)
+            {
+                var overrideContext = new ActionInspectorPropertyContext(
+                    new ActionInspectorOverrideContext(
+                        ownerNode,
+                        _currentGraph,
+                        definition,
+                        data,
+                        _actionRegistry,
+                        _bindingContext,
+                        _variables),
+                    prop,
+                    bag,
+                    ownerNodeId);
+                if (inspectorOverride.TryDrawProperty(overrideContext, out var overrideChanged))
+                {
+                    return overrideChanged;
+                }
+            }
+
             bool changed = false;
 
             switch (prop.Type)
@@ -336,15 +709,27 @@ namespace SceneBlueprint.Editor
                     break;
 
                 case PropertyType.Tag:
-                    changed = DrawStringField(prop, bag);
+                    changed = DrawTagField(prop, bag);
                     break;
 
                 case PropertyType.StructList:
-                    changed = DrawStructListField(prop, bag);
+                    changed = DrawStructListField(prop, bag, ownerNodeId);
                     break;
 
                 case PropertyType.VariableSelector:
                     changed = DrawVariableSelectorField(prop, bag);
+                    break;
+
+                case PropertyType.SignalTagSelector:
+                    changed = DrawSignalTagSelectorField(prop, bag);
+                    break;
+
+                case PropertyType.EntityRefSelector:
+                    changed = DrawEntityRefSelectorField(prop, bag);
+                    break;
+
+                case PropertyType.ConditionParams:
+                    changed = DrawConditionParamsField(prop, bag);
                     break;
 
                 default:
@@ -359,11 +744,12 @@ namespace SceneBlueprint.Editor
         {
             float current = bag.Get<float>(prop.Key);
             float result;
+            var label = BuildLabel(prop);
 
             if (prop.Min.HasValue && prop.Max.HasValue)
-                result = EditorGUILayout.Slider(prop.DisplayName, current, prop.Min.Value, prop.Max.Value);
+                result = EditorGUILayout.Slider(label, current, prop.Min.Value, prop.Max.Value);
             else
-                result = EditorGUILayout.FloatField(prop.DisplayName, current);
+                result = EditorGUILayout.FloatField(label, current);
 
             if (!result.Equals(current))
             {
@@ -377,12 +763,13 @@ namespace SceneBlueprint.Editor
         {
             int current = bag.Get<int>(prop.Key);
             int result;
+            var label = BuildLabel(prop);
 
             if (prop.Min.HasValue && prop.Max.HasValue)
-                result = EditorGUILayout.IntSlider(prop.DisplayName, current,
+                result = EditorGUILayout.IntSlider(label, current,
                     (int)prop.Min.Value, (int)prop.Max.Value);
             else
-                result = EditorGUILayout.IntField(prop.DisplayName, current);
+                result = EditorGUILayout.IntField(label, current);
 
             if (result != current)
             {
@@ -407,7 +794,7 @@ namespace SceneBlueprint.Editor
                 }
             }
 
-            int newPopupPos = EditorGUILayout.Popup(prop.DisplayName, popupPos, _variableDisplayNames);
+            int newPopupPos = EditorGUILayout.Popup(BuildLabel(prop), popupPos, _variableDisplayNames);
 
             if (newPopupPos != popupPos)
             {
@@ -421,9 +808,67 @@ namespace SceneBlueprint.Editor
         private bool DrawBoolField(PropertyDefinition prop, PropertyBag bag)
         {
             bool current = bag.Get<bool>(prop.Key);
-            bool result = EditorGUILayout.Toggle(prop.DisplayName, current);
+            bool result = EditorGUILayout.Toggle(BuildLabel(prop), current);
 
             if (result != current)
+            {
+                bag.Set(prop.Key, result);
+                return true;
+            }
+            return false;
+        }
+
+        private bool DrawTagField(PropertyDefinition prop, PropertyBag bag)
+        {
+            string current = bag.Get<string>(prop.Key) ?? "";
+            string result = TagSelectorDrawer.Draw(prop.DisplayName, current, _tagDimensionRegistry);
+
+            if (!string.Equals(result, current, StringComparison.Ordinal))
+            {
+                bag.Set(prop.Key, result);
+                return true;
+            }
+            return false;
+        }
+
+        private bool DrawSignalTagSelectorField(PropertyDefinition prop, PropertyBag bag)
+        {
+            string current = bag.Get<string>(prop.Key) ?? "";
+            string result = TagSelectorDrawer.DrawSignalTagSelector(prop.DisplayName, current, _signalTags);
+
+            if (!string.Equals(result, current, StringComparison.Ordinal))
+            {
+                bag.Set(prop.Key, result);
+                return true;
+            }
+            return false;
+        }
+
+        private bool DrawEntityRefSelectorField(PropertyDefinition prop, PropertyBag bag)
+        {
+            string current = bag.Get<string>(prop.Key) ?? "";
+            var sceneCandidates = BuildSceneEntityRefCandidates();
+            string result = EntityRefDrawer.Draw(prop.DisplayName, current, sceneCandidates);
+
+            if (!string.Equals(result, current, StringComparison.Ordinal))
+            {
+                bag.Set(prop.Key, result);
+                return true;
+            }
+            return false;
+        }
+
+        private IReadOnlyList<EntityRefSceneCandidate> BuildSceneEntityRefCandidates()
+        {
+            return EntityRefSceneCandidateProvider.BuildCandidates(_currentGraph);
+        }
+
+        private bool DrawConditionParamsField(PropertyDefinition prop, PropertyBag bag)
+        {
+            string current = bag.Get<string>(prop.Key) ?? "";
+            string result = ConditionParamsDrawer.Draw(prop.DisplayName, current);
+
+            if (!string.Equals(result, current, StringComparison.Ordinal))
             {
                 bag.Set(prop.Key, result);
                 return true;
@@ -438,7 +883,7 @@ namespace SceneBlueprint.Editor
                 return DrawTypedStringField(prop, bag);
 
             string current = bag.Get<string>(prop.Key) ?? "";
-            string result = EditorGUILayout.TextField(prop.DisplayName, current);
+            string result = EditorGUILayout.TextField(BuildLabel(prop), current);
 
             if (result != current)
             {
@@ -478,7 +923,7 @@ namespace SceneBlueprint.Editor
                 case "Int":
                 {
                     int parsed = int.TryParse(current, out var n) ? n : 0;
-                    int edited = EditorGUILayout.IntField(prop.DisplayName, parsed);
+                    int edited = EditorGUILayout.IntField(BuildLabel(prop), parsed);
                     newValue = edited.ToString();
                     break;
                 }
@@ -487,7 +932,7 @@ namespace SceneBlueprint.Editor
                     float parsed = float.TryParse(current,
                         NumberStyles.Float,
                         CultureInfo.InvariantCulture, out var f) ? f : 0f;
-                    float edited = EditorGUILayout.FloatField(prop.DisplayName, parsed);
+                    float edited = EditorGUILayout.FloatField(BuildLabel(prop), parsed);
                     newValue = edited.ToString(CultureInfo.InvariantCulture);
                     break;
                 }
@@ -495,12 +940,12 @@ namespace SceneBlueprint.Editor
                 {
                     bool parsed = current.Equals("true", StringComparison.OrdinalIgnoreCase)
                                   || current == "1";
-                    bool edited = EditorGUILayout.Toggle(prop.DisplayName, parsed);
+                    bool edited = EditorGUILayout.Toggle(BuildLabel(prop), parsed);
                     newValue = edited ? "true" : "false";
                     break;
                 }
                 default:
-                    newValue = EditorGUILayout.TextField(prop.DisplayName, current);
+                    newValue = EditorGUILayout.TextField(BuildLabel(prop), current);
                     break;
             }
 
@@ -516,65 +961,137 @@ namespace SceneBlueprint.Editor
         {
             string bindingTypeStr = prop.SceneBindingType?.ToString() ?? "Unknown";
             string scopedBindingKey = BindingScopeUtility.BuildScopedKey(ownerNodeId, prop.Key);
+            var req = prop.BindingRequirement;
 
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
 
-            // 标题行：显示名称 + 绑定类型
-            EditorGUILayout.LabelField(
-                $"\U0001F517 {prop.DisplayName} ({bindingTypeStr})",
-                EditorStyles.miniLabel);
+            // 标题行：显示名称 + 绑定类型 + 约束标记
+            var titleParts = $"\U0001F517 {prop.DisplayName} ({bindingTypeStr})";
+            if (req != null)
+            {
+                if (req.Required)  titleParts += "  \u26A0\uFE0F required";
+                if (req.Exclusive) titleParts += "  \U0001F512 exclusive";
+            }
+            EditorGUILayout.LabelField(titleParts, EditorStyles.miniLabel);
 
             if (_bindingContext != null)
             {
                 // 从 BindingContext 读取当前绑定
                 var current = _bindingContext.Get(scopedBindingKey);
-                var result = (GameObject?)EditorGUILayout.ObjectField(
-                    "场景对象", current, typeof(GameObject), true);
+                var currentMarker = current != null ? current.GetComponent<SceneMarker>() : null;
+                string currentMarkerId = currentMarker != null ? currentMarker.MarkerId : "";
+                string displayText = currentMarker != null
+                    ? currentMarker.GetDisplayLabel()
+                    : "(未绑定)";
 
-                if (result != current)
+                // 自定义绑定控件：[显示名称] [选择按钮🔍] [清除按钮×]
+                EditorGUILayout.BeginHorizontal();
+                EditorGUILayout.PrefixLabel("场景标记");
+
+                // 显示当前绑定的标记名（可点击聚焦到场景对象）
+                var labelStyle = currentMarker != null ? EditorStyles.label : EditorStyles.miniLabel;
+                if (GUILayout.Button(displayText, labelStyle))
                 {
-                    _bindingContext.Set(scopedBindingKey, result);
-                    // PropertyBag 中存储 MarkerId（稳定唯一标识，不怕改名）
-                    var marker = result != null ? result.GetComponent<SceneMarker>() : null;
-                    var markerId = marker != null ? marker.MarkerId : "";
-                    bag.Set(prop.Key, markerId);
-
-                    SBLog.Info(
-                        SBLogTags.Binding,
-                        "SceneBinding修改: node={0}, prop={1}, go={2}, markerType={3}, markerId='{4}'",
-                        ownerNodeId,
-                        prop.Key,
-                        result != null ? result.name : "(null)",
-                        marker != null ? marker.GetType().Name : "(none)",
-                        markerId);
-
-                    if (result != null && marker == null)
+                    if (currentMarker != null)
                     {
-                        SBLog.Warn(
-                            SBLogTags.Binding,
-                            "绑定对象缺少SceneMarker: node={0}, prop={1}, go={2}",
-                            ownerNodeId,
-                            prop.Key,
-                            result.name);
+                        // 点击名称 → 在 Scene View 中选中并聚焦该 Marker
+                        Selection.activeGameObject = current;
+                        SceneView.FrameLastActiveSceneView();
                     }
-                    else if (marker != null && string.IsNullOrEmpty(markerId))
-                    {
-                        SBLog.Warn(
-                            SBLogTags.Binding,
-                            "SceneMarker存在但MarkerId为空: node={0}, prop={1}, go={2}, markerType={3}",
-                            ownerNodeId,
-                            prop.Key,
-                            result != null ? result.name : "(null)",
-                            marker.GetType().Name);
-                    }
-
-                    EditorGUILayout.EndVertical();
-                    return true;
                 }
 
+                // 选择按钮：弹出 SceneMarkerSelectorWindow
+                if (GUILayout.Button("选择\u25B8", EditorStyles.miniButton, GUILayout.Width(50)))
+                {
+                    var filter = new SceneMarkerSelectorWindow.FilterConfig
+                    {
+                        MarkerTypeId = req?.MarkerTypeId,
+                        RequiredAnnotations = req?.RequiredAnnotations,
+                    };
+
+                    // 捕获闭包变量
+                    var capturedBag = bag;
+                    var capturedPropKey = prop.Key;
+                    var capturedNodeId = ownerNodeId;
+                    var capturedScopedKey = scopedBindingKey;
+                    var capturedContext = _bindingContext;
+                    var capturedGraph = _currentGraph;
+
+                    SceneMarkerSelectorWindow.Show(filter, currentMarkerId, selected =>
+                    {
+                        if (capturedContext == null) return;
+
+                        if (selected != null)
+                        {
+                            capturedContext.Set(capturedScopedKey, selected.gameObject);
+                            capturedBag.Set(capturedPropKey, selected.MarkerId);
+
+                            SBLog.Info(SBLogTags.Binding,
+                                "SceneBinding修改(Selector): node={0}, prop={1}, marker={2}, markerId='{3}'",
+                                capturedNodeId, capturedPropKey,
+                                selected.GetDisplayLabel(), selected.MarkerId);
+                        }
+                        else
+                        {
+                            capturedContext.Set(capturedScopedKey, null);
+                            capturedBag.Set(capturedPropKey, "");
+
+                            SBLog.Info(SBLogTags.Binding,
+                                "SceneBinding清除(Selector): node={0}, prop={1}",
+                                capturedNodeId, capturedPropKey);
+                        }
+
+                        // 通过 Graph 查找节点数据传递给回调
+                        var nodeData = capturedGraph?.FindNode(capturedNodeId)?.UserData as ActionNodeData;
+                        if (nodeData != null)
+                            OnPropertyChanged?.Invoke(capturedNodeId, nodeData);
+                    });
+                }
+
+                // 清除按钮
+                using (new EditorGUI.DisabledScope(currentMarker == null))
+                {
+                    if (GUILayout.Button("\u2715", GUILayout.Width(20)))
+                    {
+                        _bindingContext.Set(scopedBindingKey, null);
+                        bag.Set(prop.Key, "");
+
+                        SBLog.Info(SBLogTags.Binding,
+                            "SceneBinding清除: node={0}, prop={1}",
+                            ownerNodeId, prop.Key);
+
+                        EditorGUILayout.EndHorizontal();
+                        EditorGUILayout.EndVertical();
+                        return true;
+                    }
+                }
+
+                EditorGUILayout.EndHorizontal();
+
+                // 状态提示
                 if (current == null)
                 {
-                    EditorGUILayout.HelpBox("未绑定场景对象", MessageType.Warning);
+                    var msgType = (req != null && req.Required) ? MessageType.Error : MessageType.Warning;
+                    var msgText = (req != null && req.Required) ? "必需绑定，未绑定场景对象" : "未绑定场景对象";
+                    EditorGUILayout.HelpBox(msgText, msgType);
+                }
+                else
+                {
+                    DrawSceneBindingAuthoringSummary(
+                        EntityRefSceneIdentityConventions.BuildSceneBindingAuthoringSummary(
+                            currentMarkerId,
+                            currentMarker?.GetDisplayLabel(),
+                            currentMarker?.MarkerTypeId ?? bindingTypeStr));
+
+                    // Exclusive 冲突检测
+                    if (req is { Exclusive: true })
+                    {
+                        var conflictMsg = CheckExclusiveConflict(current, ownerNodeId, prop.Key);
+                        if (conflictMsg != null)
+                        {
+                            EditorGUILayout.HelpBox(conflictMsg, MessageType.Warning);
+                        }
+                    }
                 }
             }
             else
@@ -591,12 +1108,66 @@ namespace SceneBlueprint.Editor
                     var marker = SceneMarkerSelectionBridge.FindMarkerInScene(storedId);
                     string displayText = marker != null ? marker.GetDisplayLabel() : $"(ID: {storedId[..System.Math.Min(8, storedId.Length)]})";
                     EditorGUILayout.LabelField("场景对象", displayText);
+
+                    DrawSceneBindingAuthoringSummary(
+                        EntityRefSceneIdentityConventions.BuildSceneBindingAuthoringSummary(
+                            storedId,
+                            marker?.GetDisplayLabel(),
+                            marker?.MarkerTypeId ?? bindingTypeStr));
                 }
                 EditorGUILayout.HelpBox("请先保存蓝图以启用场景绑定", MessageType.Info);
             }
 
             EditorGUILayout.EndVertical();
             return false;
+        }
+
+        private static void DrawSceneBindingAuthoringSummary(EntityRefAuthoringSummary summary)
+        {
+            if (!summary.HasSummary && !summary.HasRuntimeIdentity && !summary.HasHelpText)
+            {
+                return;
+            }
+
+            EditorGUILayout.Space(2);
+            if (summary.HasSummary)
+            {
+                EditorGUILayout.LabelField("", $"{summary.ModeLabel}：{summary.SummaryText}", EditorStyles.miniLabel);
+            }
+
+            if (summary.HasRuntimeIdentity)
+            {
+                EditorGUILayout.LabelField("", $"稳定身份：{summary.RuntimeIdentityText}", EditorStyles.miniLabel);
+            }
+
+            if (summary.HasHelpText)
+            {
+                EditorGUILayout.HelpBox(summary.HelpText, MessageType.Info);
+            }
+        }
+
+        /// <summary>检测 Exclusive 冲突：是否有其他节点绑定了同一个 Marker</summary>
+        private string? CheckExclusiveConflict(GameObject boundObj, string ownerNodeId, string propKey)
+        {
+            if (_currentGraph == null || _bindingContext == null) return null;
+
+            var marker = boundObj.GetComponent<SceneMarker>();
+            if (marker == null || string.IsNullOrEmpty(marker.MarkerId)) return null;
+
+            foreach (var kvp in _bindingContext.All)
+            {
+                if (kvp.Value == null || kvp.Value != boundObj) continue;
+
+                // 跳过自身
+                var otherNodeId = BindingScopeUtility.ExtractNodeId(kvp.Key);
+                var otherBindingKey = BindingScopeUtility.ExtractRawBindingKey(kvp.Key);
+                if (otherNodeId == ownerNodeId && otherBindingKey == propKey) continue;
+
+                // 同一个 GameObject 被其他节点绑定了
+                return $"Exclusive 冲突：Marker \"{boundObj.name}\" 已被节点 {otherNodeId} 绑定";
+            }
+
+            return null;
         }
 
         // ── 子蓝图 Inspector ──
@@ -672,10 +1243,10 @@ namespace SceneBlueprint.Editor
                 if (node?.UserData is not ActionNodeData data) continue;
                 if (!_actionRegistry.TryGet(data.ActionTypeId, out var def)) continue;
 
-                foreach (var prop in def.Properties)
+                var properties = def.FindSceneBindingProperties();
+                for (var index = 0; index < properties.Length; index++)
                 {
-                    if (prop.Type == PropertyType.SceneBinding)
-                        result.Add((prop, data, node.Id));
+                    result.Add((properties[index], data, node.Id));
                 }
             }
             return result;
@@ -789,8 +1360,9 @@ namespace SceneBlueprint.Editor
             string current = bag.Get<string>(prop.Key) ?? prop.EnumOptions[0];
             int selectedIndex = System.Array.IndexOf(prop.EnumOptions, current);
             if (selectedIndex < 0) selectedIndex = 0;
+            var displayOptions = BuildEnumDisplayOptions(prop.EnumOptions, prop.EnumDisplayOptions);
 
-            int newIndex = EditorGUILayout.Popup(prop.DisplayName, selectedIndex, prop.EnumOptions);
+            int newIndex = EditorGUILayout.Popup(BuildLabel(prop), selectedIndex, displayOptions);
             if (newIndex != selectedIndex && newIndex >= 0 && newIndex < prop.EnumOptions.Length)
             {
                 bag.Set(prop.Key, prop.EnumOptions[newIndex]);
@@ -806,7 +1378,7 @@ namespace SceneBlueprint.Editor
         /// 使用 EditorGUILayout 绘制可增删的列表，每个元素根据 StructFields 定义绘制子字段。
         /// 数据以 JSON 字符串形式存储在 PropertyBag 中。
         /// </summary>
-        private bool DrawStructListField(PropertyDefinition prop, PropertyBag bag)
+        private bool DrawStructListField(PropertyDefinition prop, PropertyBag bag, string ownerNodeId)
         {
             if (prop.StructFields == null || prop.StructFields.Length == 0)
             {
@@ -815,7 +1387,9 @@ namespace SceneBlueprint.Editor
             }
 
             // 从 PropertyBag 读取 JSON 字符串，解析为列表
-            string json = bag.Get<string>(prop.Key) ?? "[]";
+            string json = bag.Get<string>(prop.Key)
+                ?? PropertyDefinitionValueUtility.CreateDefaultBagValue(prop)?.ToString()
+                ?? "[]";
             var items = StructListJsonHelper.Deserialize(json, prop.StructFields);
 
             bool changed = false;
@@ -859,7 +1433,7 @@ namespace SceneBlueprint.Editor
                 var item = items[i];
                 foreach (var field in prop.StructFields)
                 {
-                    if (DrawStructItemField(field, item))
+                    if (DrawStructItemField(field, item, ownerNodeId, prop.Key, parentStructKey: null))
                         changed = true;
                 }
 
@@ -906,7 +1480,12 @@ namespace SceneBlueprint.Editor
         }
 
         /// <summary>绘制 StructList 中单个元素的单个子字段</summary>
-        private bool DrawStructItemField(PropertyDefinition field, Dictionary<string, object> item)
+        private bool DrawStructItemField(
+            PropertyDefinition field,
+            Dictionary<string, object> item,
+            string ownerNodeId,
+            string rootPropertyKey,
+            string? parentStructKey)
         {
             bool changed = false;
 
@@ -914,39 +1493,47 @@ namespace SceneBlueprint.Editor
             {
                 case PropertyType.Int:
                 {
-                    int current = item.TryGetValue(field.Key, out var v) ? System.Convert.ToInt32(v) : 0;
+                    int current = item.TryGetValue(field.Key, out var v)
+                        ? System.Convert.ToInt32(v)
+                        : System.Convert.ToInt32(PropertyDefinitionValueUtility.CreateDefaultStructFieldValue(field));
                     int result;
                     if (field.Min.HasValue && field.Max.HasValue)
-                        result = EditorGUILayout.IntSlider(field.DisplayName, current,
+                        result = EditorGUILayout.IntSlider(BuildLabel(field), current,
                             (int)field.Min.Value, (int)field.Max.Value);
                     else
-                        result = EditorGUILayout.IntField(field.DisplayName, current);
+                        result = EditorGUILayout.IntField(BuildLabel(field), current);
                     if (result != current) { item[field.Key] = result; changed = true; }
                     break;
                 }
                 case PropertyType.Float:
                 {
-                    float current = item.TryGetValue(field.Key, out var v) ? System.Convert.ToSingle(v) : 0f;
+                    float current = item.TryGetValue(field.Key, out var v)
+                        ? System.Convert.ToSingle(v)
+                        : System.Convert.ToSingle(PropertyDefinitionValueUtility.CreateDefaultStructFieldValue(field));
                     float result;
                     if (field.Min.HasValue && field.Max.HasValue)
-                        result = EditorGUILayout.Slider(field.DisplayName, current,
+                        result = EditorGUILayout.Slider(BuildLabel(field), current,
                             field.Min.Value, field.Max.Value);
                     else
-                        result = EditorGUILayout.FloatField(field.DisplayName, current);
+                        result = EditorGUILayout.FloatField(BuildLabel(field), current);
                     if (!result.Equals(current)) { item[field.Key] = result; changed = true; }
                     break;
                 }
                 case PropertyType.Bool:
                 {
-                    bool current = item.TryGetValue(field.Key, out var v) && System.Convert.ToBoolean(v);
-                    bool result = EditorGUILayout.Toggle(field.DisplayName, current);
+                    bool current = item.TryGetValue(field.Key, out var v)
+                        ? System.Convert.ToBoolean(v)
+                        : System.Convert.ToBoolean(PropertyDefinitionValueUtility.CreateDefaultStructFieldValue(field));
+                    bool result = EditorGUILayout.Toggle(BuildLabel(field), current);
                     if (result != current) { item[field.Key] = result; changed = true; }
                     break;
                 }
                 case PropertyType.String:
                 {
-                    string current = item.TryGetValue(field.Key, out var v) ? v?.ToString() ?? "" : "";
-                    string result = EditorGUILayout.TextField(field.DisplayName, current);
+                    string current = item.TryGetValue(field.Key, out var v)
+                        ? v?.ToString() ?? ""
+                        : PropertyDefinitionValueUtility.CreateDefaultStructFieldValue(field)?.ToString() ?? "";
+                    string result = EditorGUILayout.TextField(BuildLabel(field), current);
                     if (result != current) { item[field.Key] = result; changed = true; }
                     break;
                 }
@@ -954,10 +1541,15 @@ namespace SceneBlueprint.Editor
                 {
                     if (field.EnumOptions != null && field.EnumOptions.Length > 0)
                     {
-                        string current = item.TryGetValue(field.Key, out var v) ? v?.ToString() ?? field.EnumOptions[0] : field.EnumOptions[0];
+                        string current = item.TryGetValue(field.Key, out var v)
+                            ? v?.ToString() ?? field.EnumOptions[0]
+                            : PropertyDefinitionValueUtility.CreateDefaultStructFieldValue(field)?.ToString() ?? field.EnumOptions[0];
                         int selectedIndex = System.Array.IndexOf(field.EnumOptions, current);
                         if (selectedIndex < 0) selectedIndex = 0;
-                        int newIndex = EditorGUILayout.Popup(field.DisplayName, selectedIndex, field.EnumOptions);
+                        int newIndex = EditorGUILayout.Popup(
+                            BuildLabel(field),
+                            selectedIndex,
+                            BuildEnumDisplayOptions(field.EnumOptions, field.EnumDisplayOptions));
                         if (newIndex != selectedIndex && newIndex >= 0 && newIndex < field.EnumOptions.Length)
                         {
                             item[field.Key] = field.EnumOptions[newIndex];
@@ -966,10 +1558,49 @@ namespace SceneBlueprint.Editor
                     }
                     break;
                 }
+                case PropertyType.EntityRefSelector:
+                {
+                    string current = item.TryGetValue(field.Key, out var v)
+                        ? v?.ToString() ?? ""
+                        : PropertyDefinitionValueUtility.CreateDefaultStructFieldValue(field)?.ToString() ?? "";
+                    string result = EntityRefDrawer.Draw(field.DisplayName, current, BuildSceneEntityRefCandidates());
+                    if (!string.Equals(result, current, StringComparison.Ordinal))
+                    {
+                        item[field.Key] = result;
+                        changed = true;
+                    }
+                    break;
+                }
+                case PropertyType.StructList:
+                {
+                    if (field.StructFields == null || field.StructFields.Length == 0)
+                    {
+                        EditorGUILayout.LabelField(field.DisplayName, "(无子字段定义)");
+                        break;
+                    }
+
+                    if (!item.TryGetValue(field.Key, out var value)
+                        || value is not List<Dictionary<string, object>> nestedItems)
+                    {
+                        nestedItems = PropertyDefinitionValueUtility.CreateDefaultStructFieldValue(field)
+                            as List<Dictionary<string, object>>
+                            ?? new List<Dictionary<string, object>>();
+                        item[field.Key] = nestedItems;
+                    }
+
+                    if (DrawNestedStructListField(field, nestedItems, ownerNodeId, rootPropertyKey))
+                    {
+                        changed = true;
+                    }
+
+                    break;
+                }
                 default:
                 {
-                    string current = item.TryGetValue(field.Key, out var v) ? v?.ToString() ?? "" : "";
-                    string result = EditorGUILayout.TextField(field.DisplayName, current);
+                    string current = item.TryGetValue(field.Key, out var v)
+                        ? v?.ToString() ?? ""
+                        : PropertyDefinitionValueUtility.CreateDefaultStructFieldValue(field)?.ToString() ?? "";
+                    string result = EditorGUILayout.TextField(BuildLabel(field), current);
                     if (result != current) { item[field.Key] = result; changed = true; }
                     break;
                 }
@@ -977,5 +1608,131 @@ namespace SceneBlueprint.Editor
 
             return changed;
         }
+
+        private bool DrawNestedStructListField(
+            PropertyDefinition field,
+            List<Dictionary<string, object>> items,
+            string ownerNodeId,
+            string rootPropertyKey)
+        {
+            bool changed = false;
+
+            EditorGUILayout.Space(2);
+            EditorGUILayout.LabelField($"─ {field.DisplayName} ({items.Count} 项) ─", EditorStyles.boldLabel);
+
+            int removeIndex = -1;
+            int moveUpIndex = -1;
+            int moveDownIndex = -1;
+
+            for (int i = 0; i < items.Count; i++)
+            {
+                EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+
+                EditorGUILayout.BeginHorizontal();
+                EditorGUILayout.LabelField($"#{i + 1}", EditorStyles.miniLabel, GUILayout.Width(24));
+                GUILayout.FlexibleSpace();
+
+                EditorGUI.BeginDisabledGroup(i == 0);
+                if (GUILayout.Button("▲", EditorStyles.miniButtonLeft, GUILayout.Width(24)))
+                    moveUpIndex = i;
+                EditorGUI.EndDisabledGroup();
+
+                EditorGUI.BeginDisabledGroup(i == items.Count - 1);
+                if (GUILayout.Button("▼", EditorStyles.miniButtonMid, GUILayout.Width(24)))
+                    moveDownIndex = i;
+                EditorGUI.EndDisabledGroup();
+
+                if (GUILayout.Button("✕", EditorStyles.miniButtonRight, GUILayout.Width(24)))
+                    removeIndex = i;
+
+                EditorGUILayout.EndHorizontal();
+
+                var item = items[i];
+                foreach (var nestedField in field.StructFields!)
+                {
+                    if (DrawStructItemField(nestedField, item, ownerNodeId, rootPropertyKey, field.Key))
+                        changed = true;
+                }
+
+                EditorGUILayout.EndVertical();
+            }
+
+            if (GUILayout.Button($"+ 添加{field.DisplayName.TrimEnd('配', '置', '列', '表')}", GUILayout.Height(20)))
+            {
+                items.Add(StructListJsonHelper.CreateDefaultItem(field.StructFields!));
+                changed = true;
+            }
+
+            if (removeIndex >= 0 && removeIndex < items.Count)
+            {
+                items.RemoveAt(removeIndex);
+                changed = true;
+            }
+
+            if (moveUpIndex > 0 && moveUpIndex < items.Count)
+            {
+                var temp = items[moveUpIndex];
+                items[moveUpIndex] = items[moveUpIndex - 1];
+                items[moveUpIndex - 1] = temp;
+                changed = true;
+            }
+
+            if (moveDownIndex >= 0 && moveDownIndex < items.Count - 1)
+            {
+                var temp = items[moveDownIndex];
+                items[moveDownIndex] = items[moveDownIndex + 1];
+                items[moveDownIndex + 1] = temp;
+                changed = true;
+            }
+
+            return changed;
+        }
+
+        private static GUIContent BuildLabel(PropertyDefinition prop)
+        {
+            return new GUIContent(prop.DisplayName, prop.Tooltip ?? string.Empty);
+        }
+
+        private static string[] BuildEnumDisplayOptions(string[] options, string[]? displayOptions = null)
+        {
+            if (displayOptions != null && displayOptions.Length == options.Length)
+            {
+                return displayOptions;
+            }
+
+            var resolvedDisplayOptions = new string[options.Length];
+            for (var index = 0; index < options.Length; index++)
+            {
+                resolvedDisplayOptions[index] = ToBilingualEnumLabel(options[index]);
+            }
+
+            return resolvedDisplayOptions;
+        }
+
+        private static string ToBilingualEnumLabel(string value)
+        {
+            return value switch
+            {
+                "All" => "全部 All",
+                "Normal" => "普通 Normal",
+                "Elite" => "精英 Elite",
+                "Boss" => "首领 Boss",
+                "Minion" => "小兵 Minion",
+                "Special" => "特殊 Special",
+                "Alive" => "存活 Alive",
+                "Static" => "静态摆件 Static",
+                "Triggered" => "休眠(等待激活) Triggered",
+                "Idle" => "待机 Idle",
+                "Patrol" => "巡逻 Patrol",
+                "Guard" => "守卫 Guard",
+                "Ambush" => "埋伏 Ambush",
+                "Inherit" => "继承区域设置 Inherit",
+                "InArea" => "区域内随机 InArea",
+                "OnMoving" => "行进间刷怪 OnMoving",
+                "None" => "不指定 None",
+                _ => value
+            };
+        }
+
     }
 }

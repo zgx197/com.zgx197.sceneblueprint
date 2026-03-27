@@ -33,7 +33,7 @@ namespace SceneBlueprint.Editor
 
             foreach (var group in grouped)
             {
-                string categoryDisplayName = CategoryRegistry.GetDisplayName(group.Key);
+                string categoryDisplayName = CategoryRegistry.GetMenuDisplayName(group.Key);
 
                 foreach (var typeDef in group.OrderBy(d => d.DisplayName))
                 {

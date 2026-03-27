@@ -1,6 +1,5 @@
 #nullable enable
 using System.Collections.Generic;
-using NodeGraph.Core;
 using SceneBlueprint.Core;
 
 namespace SceneBlueprint.Editor.Analysis.Rules
@@ -20,38 +19,6 @@ namespace SceneBlueprint.Editor.Analysis.Rules
         {
             var graph = ctx.Graph;
 
-            // 建立 portId → semanticId 快速查表（用于收集已连接端口的 semanticId）
-            var portIdToSemantic = new Dictionary<string, string>();
-            foreach (var node in graph.Nodes)
-                foreach (var port in node.Ports)
-                    portIdToSemantic[port.Id] = port.SemanticId;
-
-            // 建立 nodeId → 已连接端口 semanticId 集合
-            var nodeConnectedSemantics = new Dictionary<string, HashSet<string>>();
-            foreach (var edge in graph.Edges)
-            {
-                if (portIdToSemantic.TryGetValue(edge.SourcePortId, out var srcSemantic))
-                {
-                    var srcNodeId = graph.FindPort(edge.SourcePortId)?.NodeId;
-                    if (srcNodeId != null)
-                    {
-                        if (!nodeConnectedSemantics.TryGetValue(srcNodeId, out var set))
-                            nodeConnectedSemantics[srcNodeId] = set = new HashSet<string>();
-                        set.Add(srcSemantic);
-                    }
-                }
-                if (portIdToSemantic.TryGetValue(edge.TargetPortId, out var tgtSemantic))
-                {
-                    var tgtNodeId = graph.FindPort(edge.TargetPortId)?.NodeId;
-                    if (tgtNodeId != null)
-                    {
-                        if (!nodeConnectedSemantics.TryGetValue(tgtNodeId, out var set))
-                            nodeConnectedSemantics[tgtNodeId] = set = new HashSet<string>();
-                        set.Add(tgtSemantic);
-                    }
-                }
-            }
-
             foreach (var node in graph.Nodes)
             {
                 if (!ctx.IsBusinessNode(node.Id)) continue;
@@ -61,19 +28,16 @@ namespace SceneBlueprint.Editor.Analysis.Rules
 
                 if (node.UserData is not ActionNodeData data) continue;
                 if (!ctx.ActionRegistry.TryGet(data.ActionTypeId, out var actionDef)) continue;
-                if (actionDef.Validator == null) continue;
+                if (!ActionDefinitionValidationSupport.HasValidationHooks(actionDef)) continue;
 
-                var connectedSemantics = nodeConnectedSemantics.TryGetValue(node.Id, out var s)
-                    ? (IReadOnlyCollection<string>)s
-                    : System.Array.Empty<string>();
-
-                var validationCtx = new NodeValidationContext(
+                var result = ActionDefinitionValidationSupport.EvaluateResult(
                     node.Id,
                     actionDef,
-                    connectedSemantics,
-                    data.Properties);
+                    graph,
+                    data.Properties,
+                    variables: ctx.Variables);
 
-                foreach (var issue in actionDef.Validator.Validate(validationCtx))
+                foreach (var issue in result.Issues)
                 {
                     if (issue.IsError)
                         yield return Diagnostic.Error(RuleId, issue.Message, node.Id, issue.PortId);

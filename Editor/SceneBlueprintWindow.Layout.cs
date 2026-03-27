@@ -34,9 +34,10 @@ namespace SceneBlueprint.Editor
         {
             float contentTop    = ToolbarHeight;
             float contentHeight = position.height - contentTop;
-            float splitterCount = _showWorkbench ? 2f : 1f;
+            bool showLeftPanel = _showWorkbench || _showAIChat;
+            float splitterCount = showLeftPanel ? 2f : 1f;
             float workbenchWidth = 0f;
-            if (_showWorkbench)
+            if (showLeftPanel)
             {
                 float maxWB = Mathf.Min(MaxWorkbenchWidth,
                     position.width - MinInspectorWidth - MinCanvasWidth - SplitterWidth * splitterCount);
@@ -44,7 +45,7 @@ namespace SceneBlueprint.Editor
                 workbenchWidth  = Mathf.Clamp(_workbenchWidth, MinWorkbenchWidth, maxWB);
                 _workbenchWidth = workbenchWidth;
             }
-            float maxInsp = Mathf.Min(MaxInspectorWidth,
+            float maxInsp = Mathf.Min(GetInspectorWidthHardCap(),
                 position.width - workbenchWidth - MinCanvasWidth - SplitterWidth * splitterCount);
             if (maxInsp < MinInspectorWidth) maxInsp = MinInspectorWidth;
             _inspectorWidth = Mathf.Clamp(_inspectorWidth, MinInspectorWidth, maxInsp);
@@ -53,7 +54,7 @@ namespace SceneBlueprint.Editor
 
             var wbRect   = new Rect(0,               contentTop, workbenchWidth, contentHeight);
             var wbSplit  = new Rect(workbenchWidth,   contentTop, SplitterWidth,  contentHeight);
-            float graphX = _showWorkbench ? wbRect.xMax + SplitterWidth : 0f;
+            float graphX = showLeftPanel ? wbRect.xMax + SplitterWidth : 0f;
             var gRect    = new Rect(graphX,           contentTop, canvasWidth,    contentHeight);
             var sRect    = new Rect(gRect.xMax,       contentTop, SplitterWidth,  contentHeight);
             var iRect    = new Rect(sRect.xMax,       contentTop, _inspectorWidth, contentHeight);
@@ -96,7 +97,7 @@ namespace SceneBlueprint.Editor
                     if (_isDraggingWorkbenchSplitter)
                     {
                         _isDraggingWorkbenchSplitter = false;
-                        EditorPrefs.SetFloat(WorkbenchWidthPrefsKey, _workbenchWidth);
+                        SaveWindowUiSettings();
                         evt.Use();
                     }
                     break;
@@ -121,9 +122,9 @@ namespace SceneBlueprint.Editor
                     if (_isDraggingSplitter)
                     {
                         float nextWidth = position.width - evt.mousePosition.x - SplitterWidth * 0.5f;
-                        float splitterCount = _showWorkbench ? 2f : 1f;
+                        float splitterCount = (_showWorkbench || _showAIChat) ? 2f : 1f;
                         float maxInspectorWidth = Mathf.Min(
-                            MaxInspectorWidth,
+                            GetInspectorWidthHardCap(),
                             position.width - workbenchWidth - MinCanvasWidth - SplitterWidth * splitterCount);
                         if (maxInspectorWidth < MinInspectorWidth)
                             maxInspectorWidth = MinInspectorWidth;
@@ -172,11 +173,16 @@ namespace SceneBlueprint.Editor
                     if (_isDraggingAnalysisSplitter)
                     {
                         _isDraggingAnalysisSplitter = false;
-                        EditorPrefs.SetFloat(AnalysisHeightPrefsKey, _analysisHeight);
+                        SaveWindowUiSettings();
                         evt.Use();
                     }
                     break;
             }
+        }
+
+        private float GetInspectorWidthHardCap()
+        {
+            return Mathf.Max(MinInspectorWidth, position.width * MaxInspectorWidthRatio);
         }
     }
 }

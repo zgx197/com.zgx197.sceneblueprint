@@ -37,6 +37,11 @@ namespace SceneBlueprint.Editor.WindowServices
         private double _debounceUntil;
         private bool   _pollHooked;
 
+        // ── 回调 ──
+
+        /// <summary>分析报告更新后触发（防抖路径和 ForceRunNow 路径均会触发）</summary>
+        public event Action<AnalysisReport>? OnReportUpdated;
+
         // ── 结果 ──
 
         /// <summary>最近一次分析报告（null 表示尚未运行）</summary>
@@ -115,6 +120,7 @@ namespace SceneBlueprint.Editor.WindowServices
                 EditorApplication.update -= PollDebounce;
                 _pollHooked = false;
             }
+            OnReportUpdated = null;
         }
 
         // ── 内部 ──
@@ -138,6 +144,7 @@ namespace SceneBlueprint.Editor.WindowServices
             {
                 LastReport = AnalysisReport.Empty;
                 ApplyOverlayColors(LastReport);
+                OnReportUpdated?.Invoke(LastReport);
                 _ui.RequestRepaint();
                 return LastReport;
             }
@@ -145,8 +152,12 @@ namespace SceneBlueprint.Editor.WindowServices
             var analyzer = SceneBlueprintProfile.CreateAnalyzer(
                 profile.NodeTypes,
                 _read.ActionRegistry);
+            var variables = OutputVariableDeclarationSupport.MergeDeclaredOutputVariables(
+                _read.CurrentAsset?.Variables,
+                vm.Graph,
+                _read.ActionRegistry);
 
-            LastReport = analyzer.Analyze(vm.Graph);
+            LastReport = analyzer.Analyze(vm.Graph, variables);
 
             foreach (var d in LastReport.Diagnostics)
             {
@@ -159,6 +170,7 @@ namespace SceneBlueprint.Editor.WindowServices
             }
 
             ApplyOverlayColors(LastReport);
+            OnReportUpdated?.Invoke(LastReport);
             _ui.RequestRepaint();
             return LastReport;
         }
@@ -190,4 +202,3 @@ namespace SceneBlueprint.Editor.WindowServices
         }
     }
 }
-

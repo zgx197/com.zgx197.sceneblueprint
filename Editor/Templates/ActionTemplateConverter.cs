@@ -40,6 +40,8 @@ namespace SceneBlueprint.Editor.Templates
                 Duration = ConvertDuration(template.Duration),
             };
 
+            var requirementByBindingKey = BuildRequirementMap(template);
+
             // ── 端口：默认 FlowIn("in") + 用户配置的输出端口 ──
             var ports = new List<PortDefinition>
             {
@@ -52,16 +54,18 @@ namespace SceneBlueprint.Editor.Templates
             }
             def.Ports = ports.ToArray();
 
+            def.OutputVariables = template.OutputVariables
+                .Select(ConvertOutputVariable)
+                .ToArray();
+
             // ── 属性 ──
             def.Properties = template.Properties
                 .Where(p => !string.IsNullOrEmpty(p.Key))
-                .Select(ConvertProperty)
-                .ToArray();
-
-            // ── 场景需求 ──
-            def.SceneRequirements = template.SceneRequirements
-                .Where(r => !string.IsNullOrEmpty(r.BindingKey))
-                .Select(ConvertRequirement)
+                .Select(p => ConvertProperty(
+                    p,
+                    requirementByBindingKey.TryGetValue(p.Key, out var requirement)
+                        ? requirement
+                        : null))
                 .ToArray();
 
             return def;
@@ -89,14 +93,23 @@ namespace SceneBlueprint.Editor.Templates
 
         private static PortDefinition ConvertPort(ActionTemplateSO.PortEntry p)
         {
-            return p.PortType switch
+            var port = p.PortType switch
             {
                 ActionTemplateSO.PortTypeEntry.EventOut => Port.Event(p.Id, p.DisplayName),
                 _ => Port.Out(p.Id, p.DisplayName)
             };
+
+            if (p.GraphRole != PortGraphRole.None)
+            {
+                port.WithGraphRole(p.GraphRole, p.SummaryLabel, p.MinConnections);
+            }
+
+            return port;
         }
 
-        private static PropertyDefinition ConvertProperty(ActionTemplateSO.PropertyEntry p)
+        private static PropertyDefinition ConvertProperty(
+            ActionTemplateSO.PropertyEntry p,
+            MarkerRequirement? bindingRequirement)
         {
             var prop = new PropertyDefinition
             {
@@ -105,8 +118,13 @@ namespace SceneBlueprint.Editor.Templates
                 Type = ConvertPropertyType(p.Type),
                 Tooltip = string.IsNullOrEmpty(p.Tooltip) ? null : p.Tooltip,
                 Category = string.IsNullOrEmpty(p.Category) ? null : p.Category,
+                SectionKey = string.IsNullOrWhiteSpace(p.SectionKey) ? null : p.SectionKey,
+                SectionTitle = string.IsNullOrWhiteSpace(p.SectionTitle) ? null : p.SectionTitle,
+                SectionOrder = p.SectionOrder,
+                IsAdvanced = p.IsAdvanced,
                 Order = p.Order,
                 VisibleWhen = string.IsNullOrEmpty(p.VisibleWhen) ? null : p.VisibleWhen,
+                TypeSourceKey = string.IsNullOrWhiteSpace(p.TypeSourceKey) ? null : p.TypeSourceKey,
             };
 
             // 解析默认值
@@ -126,6 +144,7 @@ namespace SceneBlueprint.Editor.Templates
 
                 case ActionTemplateSO.PropertyTypeEntry.Enum:
                     prop.EnumOptions = ParseEnumOptions(p.EnumOptions);
+                    prop.EnumDisplayOptions = ParseEnumOptions(p.EnumDisplayOptions);
                     // 枚举默认值：未指定时用第一个选项
                     if (string.IsNullOrEmpty(p.DefaultValue) && prop.EnumOptions is { Length: > 0 })
                         prop.DefaultValue = prop.EnumOptions[0];
@@ -133,15 +152,53 @@ namespace SceneBlueprint.Editor.Templates
 
                 case ActionTemplateSO.PropertyTypeEntry.SceneBinding:
                     prop.SceneBindingType = ConvertBindingType(p.BindingType);
+                    prop.BindingRequirement = bindingRequirement;
                     break;
 
                 case ActionTemplateSO.PropertyTypeEntry.AssetRef:
                     prop.AssetFilterTypeName = string.IsNullOrEmpty(p.AssetFilterTypeName)
                         ? null : p.AssetFilterTypeName;
                     break;
+
+                case ActionTemplateSO.PropertyTypeEntry.StructList:
+                    prop.StructFields = p.StructFields
+                        .Where(field => !string.IsNullOrWhiteSpace(field.Key))
+                        .Select(field => ConvertProperty(field, bindingRequirement: null))
+                        .ToArray();
+                    prop.SummaryFormat = string.IsNullOrWhiteSpace(p.SummaryFormat)
+                        ? null
+                        : p.SummaryFormat;
+                    break;
             }
 
             return prop;
+        }
+
+        private static OutputVariableDefinition ConvertOutputVariable(ActionTemplateSO.OutputVariableEntry entry)
+        {
+            return new OutputVariableDefinition
+            {
+                Name = entry.Name?.Trim() ?? string.Empty,
+                DisplayName = entry.DisplayName?.Trim() ?? string.Empty,
+                Type = string.IsNullOrWhiteSpace(entry.Type) ? "String" : entry.Type.Trim(),
+                Scope = string.IsNullOrWhiteSpace(entry.Scope) ? "Global" : entry.Scope.Trim(),
+            };
+        }
+
+        private static Dictionary<string, MarkerRequirement> BuildRequirementMap(ActionTemplateSO template)
+        {
+            var result = new Dictionary<string, MarkerRequirement>();
+            foreach (var requirement in template.SceneRequirements)
+            {
+                if (string.IsNullOrWhiteSpace(requirement.BindingKey))
+                {
+                    continue;
+                }
+
+                result[requirement.BindingKey] = ConvertRequirement(requirement);
+            }
+
+            return result;
         }
 
         private static PropertyType ConvertPropertyType(ActionTemplateSO.PropertyTypeEntry entry)
@@ -159,6 +216,11 @@ namespace SceneBlueprint.Editor.Templates
                 ActionTemplateSO.PropertyTypeEntry.Color => PropertyType.Color,
                 ActionTemplateSO.PropertyTypeEntry.Tag => PropertyType.Tag,
                 ActionTemplateSO.PropertyTypeEntry.SceneBinding => PropertyType.SceneBinding,
+                ActionTemplateSO.PropertyTypeEntry.StructList => PropertyType.StructList,
+                ActionTemplateSO.PropertyTypeEntry.VariableSelector => PropertyType.VariableSelector,
+                ActionTemplateSO.PropertyTypeEntry.SignalTagSelector => PropertyType.SignalTagSelector,
+                ActionTemplateSO.PropertyTypeEntry.EntityRefSelector => PropertyType.EntityRefSelector,
+                ActionTemplateSO.PropertyTypeEntry.ConditionParams => PropertyType.ConditionParams,
                 _ => PropertyType.String
             };
         }
@@ -177,7 +239,15 @@ namespace SceneBlueprint.Editor.Templates
 
         private static object? ParseDefaultValue(ActionTemplateSO.PropertyTypeEntry type, string raw)
         {
-            if (string.IsNullOrEmpty(raw)) return null;
+            if (string.IsNullOrEmpty(raw))
+            {
+                return type switch
+                {
+                    ActionTemplateSO.PropertyTypeEntry.StructList => "[]",
+                    ActionTemplateSO.PropertyTypeEntry.VariableSelector => -1,
+                    _ => null
+                };
+            }
 
             return type switch
             {
@@ -195,6 +265,21 @@ namespace SceneBlueprint.Editor.Templates
                     => raw,
 
                 ActionTemplateSO.PropertyTypeEntry.Enum
+                    => raw,
+
+                ActionTemplateSO.PropertyTypeEntry.StructList
+                    => raw,
+
+                ActionTemplateSO.PropertyTypeEntry.VariableSelector
+                    => int.TryParse(raw, out var variableIndex) ? variableIndex : -1,
+
+                ActionTemplateSO.PropertyTypeEntry.SignalTagSelector
+                    => raw,
+
+                ActionTemplateSO.PropertyTypeEntry.EntityRefSelector
+                    => raw,
+
+                ActionTemplateSO.PropertyTypeEntry.ConditionParams
                     => raw,
 
                 _ => null

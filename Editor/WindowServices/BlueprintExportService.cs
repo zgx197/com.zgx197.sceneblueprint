@@ -1,8 +1,10 @@
 #nullable enable
 using System;
 using UnityEditor;
+using SceneBlueprint.Core;
 using SceneBlueprint.Editor.Export;
 using SceneBlueprint.Editor.Logging;
+using SceneBlueprint.Editor.Settings;
 using SceneBlueprint.Editor.WindowServices.Binding;
 using SceneBlueprint.Runtime;
 using static SceneBlueprint.Editor.Export.ValidationLevel;
@@ -20,6 +22,11 @@ namespace SceneBlueprint.Editor.WindowServices
         private readonly ISceneBindingCollector     _collector;
         private readonly BlueprintAnalysisController _analysis;
         private readonly Action<string>             _onExportSucceeded;
+
+        /// <summary>
+        /// 当前蓝图资产的关卡 ID（从 BlueprintAsset.LevelId 读取）。
+        /// </summary>
+        private int LevelId => _read.CurrentAsset?.LevelId ?? 0;
 
         public BlueprintExportService(
             IBlueprintReadContext      read,
@@ -58,13 +65,20 @@ namespace SceneBlueprint.Editor.WindowServices
             var sceneBindings = _collector.CollectForExport();
             var asset         = _read.CurrentAsset;
 
-            string bpName = asset != null ? asset.BlueprintName : "场景蓝图";
+            string bpName = asset != null ? asset.BlueprintName : "SceneBlueprint";
             string? bpId  = asset?.BlueprintId;
 
             var exportOptions = new BlueprintExporter.ExportOptions
             {
                 AdapterType = _read.GetAdapterType()
             };
+
+            // 将业务侧导出设置写入 UserData，供 IExportEnricher 读取
+            if (LevelId > 0)
+            {
+                exportOptions.UserData[ActionCompilationUserDataKeys.LevelId] = LevelId;
+                exportOptions.UserData[ActionCompilationUserDataKeys.MonsterMappingSnapshot] = SceneBlueprintSettingsService.MonsterMapping;
+            }
 
             var result = BlueprintExporter.Export(
                 viewModel.Graph, registry, sceneBindings,
@@ -73,21 +87,24 @@ namespace SceneBlueprint.Editor.WindowServices
                 options:       exportOptions,
                 variables:     asset?.Variables);
 
-            int exportErrorCount = 0;
+            var validationSummary = ValidationMessagePresentation.BuildSummary(result.Messages);
             foreach (var msg in result.Messages)
             {
                 switch (msg.Level)
                 {
-                    case Error:   SBLog.Error(SBLogTags.Export, msg.Message); exportErrorCount++; break;
+                    case Error:   SBLog.Error(SBLogTags.Export, msg.Message); break;
                     case Warning: SBLog.Warn(SBLogTags.Export, msg.Message);  break;
                     default:      SBLog.Info(SBLogTags.Export, msg.Message);  break;
                 }
             }
 
-            if (exportErrorCount > 0)
+            if (validationSummary.ErrorCount > 0)
             {
                 EditorUtility.DisplayDialog("编译失败，无法导出",
-                    $"导出器转换时产生 {exportErrorCount} 个错误，请查看 Console 日志。", "确定");
+                    ValidationMessagePresentation.BuildDialogMessage(
+                        "导出阶段发现阻断问题，当前无法继续写出蓝图 JSON。",
+                        result.Messages),
+                    "确定");
                 return;
             }
 
@@ -107,11 +124,11 @@ namespace SceneBlueprint.Editor.WindowServices
             string exportTime = System.DateTime.Now.ToString("HH:mm:ss");
             _onExportSucceeded(exportTime);
 
-            string successMsg = report.HasWarnings
-                ? $"蓝图已导出（{report.WarningCount} 条警告）：\n{path}"
+            string successMsg = report.HasWarnings || validationSummary.WarningCount > 0
+                ? $"蓝图已导出到:\n{path}\n\n分析警告 {report.WarningCount} 条，导出警告 {validationSummary.WarningCount} 条。"
                 : $"蓝图已导出到:\n{path}\n\n行动数: {result.Data.Actions.Length}\n过渡数: {result.Data.Transitions.Length}";
             EditorUtility.DisplayDialog(
-                report.HasWarnings ? "导出完成（有警告）" : "导出成功",
+                report.HasWarnings || validationSummary.WarningCount > 0 ? "导出完成（有警告）" : "导出成功",
                 successMsg, "确定");
 
             SBLog.Info(SBLogTags.Export, $"蓝图已导出到: {path} " +

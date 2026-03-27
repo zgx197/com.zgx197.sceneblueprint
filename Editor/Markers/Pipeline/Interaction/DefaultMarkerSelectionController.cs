@@ -65,7 +65,7 @@ namespace SceneBlueprint.Editor.Markers.Pipeline.Interaction
             if (interactionMode == GizmoRenderPipeline.MarkerInteractionMode.Pick)
             {
                 if (CanHandlePick(evt))
-                    HandleLegacyPickMode(evt, hitTestService, drawList, renderers);
+                    HandlePickModeWithControlCapture(evt, hitTestService, drawList, renderers);
                 else if (evt.type == EventType.Ignore || evt.type == EventType.Used)
                     _pendingPick = false;
 
@@ -264,7 +264,7 @@ namespace SceneBlueprint.Editor.Markers.Pipeline.Interaction
         /// Pick 模式（强接管）。
         /// 通过 defaultControl/hotControl 获得稳定命中与点击反馈。
         /// </summary>
-        private void HandleLegacyPickMode(
+        private void HandlePickModeWithControlCapture(
             Event evt,
             IMarkerHitTestService hitTestService,
             IReadOnlyList<GizmoDrawContext> drawList,

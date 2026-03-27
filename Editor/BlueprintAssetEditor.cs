@@ -121,10 +121,7 @@ namespace SceneBlueprint.Editor
 
         private void OpenInEditor(BlueprintAsset asset)
         {
-            var window = EditorWindow.GetWindow<SceneBlueprintWindow>();
-            window.titleContent = new GUIContent("场景蓝图编辑器");
-            window.minSize = new Vector2(800, 600);
-            window.Show();
+            var window = SceneBlueprintWindow.OpenWindowInstance(suppressWorkspaceRestore: true);
             window.LoadFromAsset(asset);
         }
     }

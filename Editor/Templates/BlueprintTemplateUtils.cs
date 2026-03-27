@@ -98,20 +98,19 @@ namespace SceneBlueprint.Editor.Templates
                 if (node?.UserData is not ActionNodeData data) continue;
                 if (!registry.TryGet(data.ActionTypeId, out var actionDef)) continue;
 
-                foreach (var prop in actionDef.Properties)
+                var declaredBindings = SceneBindingDeclarationSupport.CollectDeclaredBindings(
+                    actionDef,
+                    data.Properties.All,
+                    includeEmpty: true);
+                foreach (var binding in declaredBindings)
                 {
-                    if (prop.Type != PropertyType.SceneBinding) continue;
-                    if (!seen.Add(prop.Key)) continue;
-
-                    // 查找对应的 MarkerRequirement
-                    var markerReq = actionDef.SceneRequirements?
-                        .FirstOrDefault(r => r.BindingKey == prop.Key);
+                    if (!seen.Add(binding.BindingKey)) continue;
 
                     result.Add(new BlueprintTemplateSO.TemplateBindingRequirement
                     {
-                        BindingKey = prop.Key,
-                        MarkerTypeId = markerReq?.MarkerTypeId ?? "Point",
-                        Description = prop.DisplayName,
+                        BindingKey = binding.BindingKey,
+                        MarkerTypeId = SceneBindingDeclarationSupport.ResolveMarkerTypeId(binding),
+                        Description = SceneBindingDeclarationSupport.ResolveTitle(binding),
                         SourceActionTypeId = data.ActionTypeId
                     });
                 }

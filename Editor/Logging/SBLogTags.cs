@@ -11,7 +11,7 @@ namespace SceneBlueprint.Editor.Logging
         /// <summary>蓝图加载/保存/创建</summary>
         public const string Blueprint = "Blueprint";
 
-        /// <summary>绑定上下文/同步到场景</summary>
+        /// <summary>绑定上下文</summary>
         public const string Binding = "Binding";
 
         /// <summary>双向联动/选中高亮</summary>
@@ -37,5 +37,8 @@ namespace SceneBlueprint.Editor.Logging
 
         /// <summary>模板系统（ActionTemplateSO / BlueprintTemplateSO）</summary>
         public const string Template = "Template";
+
+        /// <summary>场景快照拍摄/恢复</summary>
+        public const string Snapshot = "Snapshot";
     }
 }

@@ -142,41 +142,10 @@ namespace SceneBlueprint.Editor.WindowServices
         /// </summary>
         private List<VariableDeclaration> CollectNodeOutputVariables()
         {
-            var result   = new List<VariableDeclaration>();
             var viewModel = _ctx.ViewModel;
-            if (viewModel == null) return result;
-
-            var registry = _ctx.ActionRegistry;
-            var seen     = new HashSet<string>();
-
-            foreach (var node in viewModel.Graph.Nodes)
-            {
-                if (node.UserData is not Core.ActionNodeData data) continue;
-                if (!registry.TryGet(data.ActionTypeId, out var def)) continue;
-
-                foreach (var outVar in def.OutputVariables)
-                {
-                    if (seen.Contains(outVar.Name)) continue;
-                    seen.Add(outVar.Name);
-                    result.Add(new VariableDeclaration
-                    {
-                        Index        = NodeOutputVarIndex(outVar.Name),
-                        Name         = outVar.Name,
-                        Type         = outVar.Type,
-                        Scope        = outVar.Scope,
-                        InitialValue = ""
-                    });
-                }
-            }
-            return result;
-        }
-
-        /// <summary>DJB2 hash of name → 10000–19999（稳定、无 Unity 依赖）。</summary>
-        private static int NodeOutputVarIndex(string name)
-        {
-            uint h = 5381;
-            foreach (char c in name) h = ((h << 5) + h) + c;
-            return 10000 + (int)(h % 10000);
+            return OutputVariableDeclarationSupport.CollectDeclaredOutputVariables(
+                viewModel?.Graph,
+                _ctx.ActionRegistry);
         }
 
         /// <summary>绘制一条可编辑的变量条目，返回 true 表示用户点击了删除。</summary>

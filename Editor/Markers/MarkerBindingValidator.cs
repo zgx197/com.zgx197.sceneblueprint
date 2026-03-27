@@ -84,16 +84,41 @@ namespace SceneBlueprint.Editor.Markers
 
             // 收集蓝图中所有被引用的 MarkerId
             var referencedMarkerIds = new HashSet<string>();
+            // Exclusive 冲突检测：markerId → [(nodeDisplayName, bindingDisplayName)]
+            var exclusiveBindings = new Dictionary<string, List<(string nodeDisplay, string bindingDisplay)>>();
 
             foreach (var node in graph.Nodes)
             {
                 if (node.UserData is not ActionNodeData data) continue;
                 if (!actionRegistry.TryGet(data.ActionTypeId, out var actionDef)) continue;
+                var declaredBindings = SceneBindingDeclarationSupport.CollectDeclaredBindings(
+                    actionDef,
+                    data.Properties.All,
+                    includeEmpty: true);
 
-                // 检查该 Action 的 SceneRequirements
-                if (actionDef.SceneRequirements != null && actionDef.SceneRequirements.Length > 0)
+                // 检查该 Action 的正式 SceneBinding 声明
+                if (declaredBindings.Count > 0)
                 {
-                    ValidateNodeRequirements(report, node, data, actionDef, markerById, referencedMarkerIds);
+                    ValidateNodeRequirements(report, node, actionDef, declaredBindings, markerById, referencedMarkerIds);
+
+                    // 收集 Exclusive 绑定
+                    foreach (var binding in declaredBindings)
+                    {
+                        var req = binding.Requirement;
+                        if (req == null) continue;
+                        if (!req.Exclusive) continue;
+                        var markerId = binding.RawValue;
+                        if (string.IsNullOrEmpty(markerId)) continue;
+
+                        if (!exclusiveBindings.TryGetValue(markerId, out var list))
+                        {
+                            list = new List<(string, string)>();
+                            exclusiveBindings[markerId] = list;
+                        }
+
+                        var bindingDisplayName = SceneBindingDeclarationSupport.ResolveTitle(binding);
+                        list.Add((actionDef.DisplayName + " [" + node.Id[..System.Math.Min(6, node.Id.Length)] + "]", bindingDisplayName));
+                    }
                 }
 
                 // 收集所有属性中引用的 MarkerId
@@ -105,6 +130,18 @@ namespace SceneBlueprint.Editor.Markers
                             referencedMarkerIds.Add(strVal);
                     }
                 }
+            }
+
+            // 检查 Exclusive 冲突：同一个 Marker 被多个 Exclusive 绑定引用
+            foreach (var kvp in exclusiveBindings)
+            {
+                if (kvp.Value.Count <= 1) continue;
+                var markerLabel = markerById.TryGetValue(kvp.Key, out var m) ? m.GetDisplayLabel() : kvp.Key;
+                var nodes = string.Join(", ", kvp.Value.Select(v => v.nodeDisplay));
+                report.Add(
+                    ValidationEntry.Severity.Error,
+                    $"Exclusive 冲突：标记 [{markerLabel}] 被 {kvp.Value.Count} 个节点独占绑定: {nodes}",
+                    null, kvp.Key);
             }
 
             // 检查缺失标记：节点引用了不存在的 MarkerId
@@ -120,56 +157,76 @@ namespace SceneBlueprint.Editor.Markers
         private static void ValidateNodeRequirements(
             ValidationReport report,
             Node node,
-            ActionNodeData data,
             ActionDefinition actionDef,
+            IReadOnlyList<SceneBindingDeclarationSupport.DeclaredSceneBindingValue> declaredBindings,
             Dictionary<string, SceneMarker> markerById,
             HashSet<string> referencedMarkerIds)
         {
-            foreach (var req in actionDef.SceneRequirements)
+            for (var index = 0; index < declaredBindings.Count; index++)
             {
-                // 检查该 BindingKey 是否在属性中有值
-                if (data.Properties.All.TryGetValue(req.BindingKey, out var val))
+                var binding = declaredBindings[index];
+                var req = binding.Requirement;
+                if (req == null)
                 {
-                    if (val is string markerId && !string.IsNullOrEmpty(markerId))
-                    {
-                        referencedMarkerIds.Add(markerId);
+                    continue;
+                }
 
-                        // 检查标记是否存在于场景
-                        if (!markerById.TryGetValue(markerId, out var marker))
+                var markerId = binding.RawValue;
+                var displayName = SceneBindingDeclarationSupport.ResolveTitle(binding);
+
+                if (!string.IsNullOrEmpty(markerId))
+                {
+                    referencedMarkerIds.Add(markerId);
+
+                    // 检查标记是否存在于场景
+                    if (!markerById.TryGetValue(markerId, out var marker))
+                    {
+                        report.Add(
+                            ValidationEntry.Severity.Warning,
+                            $"节点 [{actionDef.DisplayName}] 的绑定 '{displayName}' 引用的标记 ({markerId}) 在场景中不存在",
+                            node.Id, markerId);
+                    }
+                    else
+                    {
+                        // 检查类型匹配
+                        var markerTypeId = SceneBindingDeclarationSupport.ResolveMarkerTypeId(binding);
+                        if (!string.Equals(marker.MarkerTypeId, markerTypeId, System.StringComparison.Ordinal))
                         {
                             report.Add(
                                 ValidationEntry.Severity.Warning,
-                                $"节点 [{actionDef.DisplayName}] 的绑定 '{req.DisplayName}' 引用的标记 ({markerId}) 在场景中不存在",
+                                $"节点 [{actionDef.DisplayName}] 的绑定 '{displayName}' " +
+                                $"期望 {markerTypeId} 类型标记，但绑定的是 {marker.MarkerTypeId} 类型",
                                 node.Id, markerId);
                         }
-                        else
+
+                        // 检查 RequiredAnnotations
+                        if (req.RequiredAnnotations != null && req.RequiredAnnotations.Length > 0)
                         {
-                            // 检查类型匹配
-                            if (!string.Equals(marker.MarkerTypeId, req.MarkerTypeId, System.StringComparison.Ordinal))
+                            var annotations = marker.GetComponents<Runtime.Markers.Annotations.MarkerAnnotation>();
+                            var annoTypeIds = new HashSet<string>();
+                            foreach (var anno in annotations)
+                                annoTypeIds.Add(anno.AnnotationTypeId);
+
+                            foreach (var requiredAnno in req.RequiredAnnotations)
                             {
-                                report.Add(
-                                    ValidationEntry.Severity.Warning,
-                                    $"节点 [{actionDef.DisplayName}] 的绑定 '{req.DisplayName}' " +
-                                    $"期望 {req.MarkerTypeId} 类型标记，但绑定的是 {marker.MarkerTypeId} 类型",
-                                    node.Id, markerId);
+                                if (!annoTypeIds.Contains(requiredAnno))
+                                {
+                                    report.Add(
+                                        ValidationEntry.Severity.Error,
+                                        $"节点 [{actionDef.DisplayName}] 的绑定 '{displayName}' " +
+                                        $"绑定的标记 [{marker.GetDisplayLabel()}] 缺少必需的 Annotation: {requiredAnno}",
+                                        node.Id, markerId);
+                                }
                             }
                         }
-                    }
-                    else if (req.Required)
-                    {
-                        // 值为空但标记是必需的
-                        report.Add(
-                            ValidationEntry.Severity.Error,
-                            $"节点 [{actionDef.DisplayName}] 缺少必需绑定: {req.DisplayName}",
-                            node.Id);
                     }
                 }
                 else if (req.Required)
                 {
-                    // 属性不存在且标记是必需的
+                    // 值为空但标记是必需的
                     report.Add(
                         ValidationEntry.Severity.Error,
-                        $"节点 [{actionDef.DisplayName}] 缺少必需绑定: {req.DisplayName}",
+                        $"节点 [{actionDef.DisplayName}] 缺少必需绑定: {displayName}",
                         node.Id);
                 }
             }

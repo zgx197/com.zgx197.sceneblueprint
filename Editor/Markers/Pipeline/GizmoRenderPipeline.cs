@@ -436,29 +436,44 @@ namespace SceneBlueprint.Editor.Markers.Pipeline
             
             if (marker is AreaMarker am)
             {
-                if (am.Shape == AreaShape.Box)
+                switch (am.Shape)
                 {
-                    var size = am.BoxSize;
-                    // 考虑旋转后的包围盒
-                    var rotatedSize = am.transform.rotation * size;
-                    return new Bounds(pos, new Vector3(
-                        Mathf.Abs(rotatedSize.x),
-                        Mathf.Abs(rotatedSize.y),
-                        Mathf.Abs(rotatedSize.z)));
-                }
-                else
-                {
-                    // Polygon：遍历世界坐标顶点计算包围盒
-                    var verts = am.GetWorldVertices();
-                    if (verts.Count == 0)
-                        return new Bounds(pos, Vector3.one * 2f);
+                    case AreaShape.Box:
+                    {
+                        var size = new Vector3(am.BoxSize.x, am.Height, am.BoxSize.y);
+                        var rotatedSize = am.transform.rotation * size;
+                        return new Bounds(pos + Vector3.up * am.Height * 0.5f, new Vector3(
+                            Mathf.Abs(rotatedSize.x),
+                            Mathf.Abs(rotatedSize.y),
+                            Mathf.Abs(rotatedSize.z)));
+                    }
+                    case AreaShape.Circle:
+                    {
+                        float d = am.Radius * 2f;
+                        return new Bounds(pos + Vector3.up * am.Height * 0.5f,
+                            new Vector3(d, am.Height, d));
+                    }
+                    case AreaShape.Capsule:
+                    {
+                        var (pA, pB) = am.GetCapsuleWorldPoints();
+                        var bounds = new Bounds(pA, Vector3.zero);
+                        bounds.Encapsulate(pB);
+                        bounds.Expand(am.CapsuleRadius * 2f);
+                        bounds.Encapsulate(bounds.center + Vector3.up * am.Height);
+                        return bounds;
+                    }
+                    default: // Polygon
+                    {
+                        var verts = am.GetWorldVertices();
+                        if (verts.Count == 0)
+                            return new Bounds(pos, Vector3.one * 2f);
 
-                    var bounds = new Bounds(verts[0], Vector3.zero);
-                    for (int i = 1; i < verts.Count; i++)
-                        bounds.Encapsulate(verts[i]);
-                    // 扩展高度
-                    bounds.Encapsulate(bounds.center + Vector3.up * am.Height);
-                    return bounds;
+                        var bounds = new Bounds(verts[0], Vector3.zero);
+                        for (int i = 1; i < verts.Count; i++)
+                            bounds.Encapsulate(verts[i]);
+                        bounds.Encapsulate(bounds.center + Vector3.up * am.Height);
+                        return bounds;
+                    }
                 }
             }
 

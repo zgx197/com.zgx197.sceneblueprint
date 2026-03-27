@@ -322,7 +322,8 @@ namespace SceneBlueprint.Editor.WindowServices
                 if (marker is AreaMarker am)
                 {
                     h = h * 31 + (int)am.Shape;
-                    h = h * 31 + PreviewStateTracker.QuantizeComponents(am.BoxSize.x, am.BoxSize.y, am.BoxSize.z);
+                    h = h * 31 + PreviewStateTracker.QuantizeComponents(am.BoxSize.x, am.BoxSize.y, am.Radius);
+                    h = h * 31 + PreviewStateTracker.QuantizeComponents(am.CapsuleLength, am.CapsuleRadius, 0f);
                     h = h * 31 + (int)(am.Height * 1000f);
                     if (am.Vertices != null)
                     {

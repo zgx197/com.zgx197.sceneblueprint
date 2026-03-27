@@ -3,34 +3,29 @@ using SceneBlueprint.Contract;
 using SceneBlueprint.Core;
 using SceneBlueprint.Editor.Logging;
 using SceneBlueprint.Editor.Markers;
-using SceneBlueprint.Editor.WindowServices;
-using SceneBlueprint.Runtime;
 
 namespace SceneBlueprint.Editor.WindowServices.Binding
 {
     /// <summary>
-    /// 场景绑定恢复器——仅负责"场景 → 图"方向：将场景持久化数据或 MarkerId 反查结果
+    /// 场景绑定恢复器——仅负责“场景 → 图”方向：通过 MarkerId 反查场景中的 Marker，
     /// 填充到 <see cref="BindingContext"/>。
     /// </summary>
     public class SceneBindingRestorer
     {
         private readonly IBlueprintReadContext _ctx;
         private readonly BindingContext        _bindingContext;
-        private readonly ISceneBindingStore    _store;
 
         public SceneBindingRestorer(
             IBlueprintReadContext ctx,
-            BindingContext        bindingContext,
-            ISceneBindingStore    store)
+            BindingContext        bindingContext)
         {
             _ctx            = ctx;
             _bindingContext = bindingContext;
-            _store          = store;
         }
 
         /// <summary>
         /// 蓝图加载后从场景恢复绑定到 BindingContext。
-        /// 策略1：SceneBindingStore → 策略2：PropertyBag MarkerId 反查。
+        /// 通过 PropertyBag 中存储的 MarkerId 在场景中查找对应的 Marker。
         /// </summary>
         public void RestoreFromScene()
         {
@@ -40,16 +35,6 @@ namespace SceneBlueprint.Editor.WindowServices.Binding
 
             _bindingContext.Clear();
 
-            // 策略1：从持久化存储恢复
-            if (_store.TryLoadBindingGroups(asset, out var groups))
-            {
-                foreach (var g in groups)
-                    foreach (var b in g.Bindings)
-                        if (!string.IsNullOrEmpty(b.BindingKey) && b.BoundObject != null)
-                            _bindingContext.Set(b.BindingKey, b.BoundObject);
-            }
-
-            // 策略2：对未恢复的绑定用 MarkerId 在场景中回退查找
             var registry = _ctx.ActionRegistry;
             foreach (var node in vm.Graph.Nodes)
             {
@@ -60,7 +45,6 @@ namespace SceneBlueprint.Editor.WindowServices.Binding
                 {
                     if (prop.SceneBindingType == null) continue;
                     string scopedKey = BindingScopeUtility.BuildScopedKey(node.Id, prop.Key);
-                    if (_bindingContext.Get(scopedKey) != null) continue;
 
                     var storedId = data.Properties.Get<string>(prop.Key);
                     if (string.IsNullOrEmpty(storedId)) continue;

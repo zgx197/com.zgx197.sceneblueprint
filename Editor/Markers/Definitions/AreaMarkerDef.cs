@@ -22,7 +22,8 @@ namespace SceneBlueprint.Editor.Markers.Definitions
             {
                 var am = (AreaMarker)marker;
                 am.Shape = AreaShape.Box;
-                am.BoxSize = new Vector3(8f, 3f, 8f);
+                am.BoxSize = new Vector2(8f, 8f);
+                am.Height = 3f;
             },
         };
     }

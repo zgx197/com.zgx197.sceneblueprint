@@ -1,6 +1,7 @@
 #nullable enable
 using UnityEditor;
 using UnityEngine;
+using SceneBlueprint.Editor.Settings;
 
 namespace SceneBlueprint.Editor
 {
@@ -17,9 +18,10 @@ namespace SceneBlueprint.Editor
                 NewGraph();
             }
 
-            if (GUILayout.Button("保存", EditorStyles.toolbarButton, GUILayout.Width(40)))
+            using (new EditorGUI.DisabledScope(_sessionState == SessionState.Suspended))
             {
-                SaveBlueprint();
+                if (GUILayout.Button("保存", EditorStyles.toolbarButton, GUILayout.Width(40)))
+                    SaveBlueprint();
             }
 
             if (GUILayout.Button("加载", EditorStyles.toolbarButton, GUILayout.Width(40)))
@@ -29,6 +31,7 @@ namespace SceneBlueprint.Editor
 
             GUILayout.Space(6);
 
+            // 变量面板 Toggle
             bool wantVariables = GUILayout.Toggle(
                 _showWorkbench,
                 new GUIContent("变量", "显示/隐藏 Blackboard 变量面板"),
@@ -37,7 +40,30 @@ namespace SceneBlueprint.Editor
             if (wantVariables != _showWorkbench)
             {
                 _showWorkbench = wantVariables;
-                EditorPrefs.SetBool(WorkbenchVisiblePrefsKey, _showWorkbench);
+                // 变量和 AI 助手互斥占用左侧面板
+                if (_showWorkbench)
+                {
+                    _showAIChat = false;
+                }
+                SaveWindowUiSettings();
+                Repaint();
+            }
+
+            // AI 助手 Toggle
+            bool wantAIChat = GUILayout.Toggle(
+                _showAIChat,
+                new GUIContent("AI 助手", "显示/隐藏 AI 对话面板"),
+                EditorStyles.toolbarButton,
+                GUILayout.Width(52));
+            if (wantAIChat != _showAIChat)
+            {
+                _showAIChat = wantAIChat;
+                // 变量和 AI 助手互斥占用左侧面板
+                if (_showAIChat)
+                {
+                    _showWorkbench = false;
+                }
+                SaveWindowUiSettings();
                 Repaint();
             }
 
@@ -59,6 +85,22 @@ namespace SceneBlueprint.Editor
                 _session?.SubGraphCtrl.CollapseAll(false);
             }
 
+            GUILayout.Space(6);
+
+            if (GUILayout.Button("设置", EditorStyles.toolbarButton, GUILayout.Width(40)))
+            {
+                Settings.SceneBlueprintSettingsHubWindow.ShowWindow();
+            }
+
+            GUILayout.Space(8);
+            var prevAutosaveColor = GUI.color;
+            GUI.color = GetAutosaveStatusColor();
+            GUILayout.Label(
+                new GUIContent(GetAutosaveStatusText(), GetAutosaveStatusTooltip()),
+                EditorStyles.miniLabel,
+                GUILayout.Width(118));
+            GUI.color = prevAutosaveColor;
+
             GUILayout.FlexibleSpace();
 
             var vm = _session?.ViewModel;
@@ -75,7 +117,16 @@ namespace SceneBlueprint.Editor
                     ? $"子蓝图: {subGraphCount}  节点: {nodeCount}  连线: {edgeCount}  {bindingInfo}"
                     : $"节点: {nodeCount}  连线: {edgeCount}  {bindingInfo}";
 
-                if (report != null)
+                if (_sessionState == SessionState.Suspended)
+                {
+                    var sceneName = System.IO.Path.GetFileNameWithoutExtension(_anchoredScenePath);
+                    var prevColor = GUI.color;
+                    GUI.color = new Color(1f, 0.6f, 0.2f);
+                    GUILayout.Label($"⚠ 场景已切换，绑定已挂起。切回 [{sceneName}] 可恢复。",
+                        EditorStyles.miniLabel);
+                    GUI.color = prevColor;
+                }
+                else if (report != null)
                 {
                     string analysisStatus = report.HasErrors   ? $"  ✕ {report.ErrorCount}错误"
                                           : report.HasWarnings ? $"  △ {report.WarningCount}警告"
@@ -93,18 +144,31 @@ namespace SceneBlueprint.Editor
                 }
             }
 
-            GUILayout.Space(6);
-
-            if (GUILayout.Button("同步到场景", EditorStyles.toolbarButton, GUILayout.Width(70)))
-            {
-                SyncToScene();
-            }
-
             GUILayout.Space(10);
 
-            if (GUILayout.Button("导出", EditorStyles.toolbarButton, GUILayout.Width(40)))
+            // ── 关卡 ID（toggle 编辑模式） ──
+            DrawLevelIdSection();
+
+            GUILayout.Space(4);
+
+            // ── 导出 ──
+            using (new EditorGUI.DisabledScope(_sessionState == SessionState.Suspended))
             {
-                _session?.ExportService.ExportBlueprint();
+                if (GUILayout.Button("导出", EditorStyles.toolbarButton, GUILayout.Width(40)))
+                {
+                    if (_session != null)
+                    {
+                        if (_session.LevelId <= 0)
+                        {
+                            EditorUtility.DisplayDialog("导出提示",
+                                "请先设置关卡 ID（点击工具栏右侧的「修改关卡」按钮）。", "确定");
+                        }
+                        else
+                        {
+                            _session.ExportService.ExportBlueprint();
+                        }
+                    }
+                }
             }
 
             if (!string.IsNullOrEmpty(_lastExportTime))
@@ -115,6 +179,60 @@ namespace SceneBlueprint.Editor
             GUILayout.Space(6);
 
             GUILayout.EndHorizontal();
+        }
+
+        // ══════════════════════════════════════════════════════════
+        //  关卡 ID Toggle 编辑
+        // ══════════════════════════════════════════════════════════
+
+        /// <summary>是否处于关卡 ID 编辑模式</summary>
+        private bool _editingLevelId;
+
+        /// <summary>编辑中的临时值</summary>
+        private int _editingLevelIdValue;
+
+        /// <summary>
+        /// 绘制关卡 ID 区域：只读标签 ↔ 可编辑输入框，通过 toggle 按钮切换。
+        /// </summary>
+        private void DrawLevelIdSection()
+        {
+            bool hasAsset = _session?.CurrentAsset != null;
+            int currentLevelId = _session?.LevelId ?? 0;
+
+            if (_editingLevelId && hasAsset)
+            {
+                // ── 编辑模式：输入框 + 确认按钮 ──
+                EditorGUILayout.LabelField("关卡", GUILayout.Width(28));
+                _editingLevelIdValue = EditorGUILayout.IntField(_editingLevelIdValue, GUILayout.Width(48));
+                if (_editingLevelIdValue < 1) _editingLevelIdValue = 1;
+
+                if (GUILayout.Button("确认关卡", EditorStyles.toolbarButton, GUILayout.Width(56)))
+                {
+                    if (_session != null)
+                        _session.LevelId = _editingLevelIdValue;
+                    _editingLevelId = false;
+                }
+            }
+            else
+            {
+                // ── 只读模式：显示当前值 + 修改按钮 ──
+                string labelText = currentLevelId > 0 ? $"关卡: {currentLevelId}" : "关卡: 未设置";
+
+                var prevColor = GUI.color;
+                if (currentLevelId <= 0 && hasAsset)
+                    GUI.color = new Color(1f, 0.7f, 0.3f); // 未设置时橙色
+                GUILayout.Label(labelText, EditorStyles.miniLabel);
+                GUI.color = prevColor;
+
+                using (new EditorGUI.DisabledScope(!hasAsset))
+                {
+                    if (GUILayout.Button("修改关卡", EditorStyles.toolbarButton, GUILayout.Width(56)))
+                    {
+                        _editingLevelId = true;
+                        _editingLevelIdValue = currentLevelId > 0 ? currentLevelId : 1;
+                    }
+                }
+            }
         }
     }
 }

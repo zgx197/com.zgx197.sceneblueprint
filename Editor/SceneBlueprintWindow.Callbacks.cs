@@ -121,6 +121,7 @@ namespace SceneBlueprint.Editor
         private void OnNodePropertyChanged(string nodeId, ActionNodeData nodeData)
         {
             if (_session == null) return;
+            if (nodeData == null) return;
 
             string areaBindingId = nodeData.ActionTypeId == "Location.RandomArea"
                 ? (nodeData.Properties.Get<string>("area") ?? "")
@@ -131,6 +132,7 @@ namespace SceneBlueprint.Editor
                 nodeId, nodeData.ActionTypeId, areaBindingId, GetPreviewContextId());
 
             _session.NotifyNodePropertyChanged(nodeId, nodeData);
+            MarkAutosaveGraphDirty();
         }
 
         /// <summary>场景中双击标记时的回调——在蓝图中聚焦到引用该标记的节点。</summary>

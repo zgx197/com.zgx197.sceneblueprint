@@ -107,9 +107,6 @@ namespace SceneBlueprint.Editor.Markers
                 Trace($"OnToolGUI evt={evt.type}, button={evt.button}, mods={evt.modifiers}, activeToolType={ToolManager.activeToolType?.Name ?? "null"}");
             }
 
-            // P2：创建输入也走 Tool 路由（Shift + 右键）。
-            SceneViewMarkerTool.HandleCreateFromTool(evt, sceneView);
-
             GizmoRenderPipeline.HandlePickingFromTool(evt);
         }
 

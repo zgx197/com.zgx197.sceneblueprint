@@ -1,6 +1,7 @@
 #nullable enable
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using UnityEditor;
 using UnityEngine;
 using NodeGraph.Commands;
@@ -10,6 +11,7 @@ using NodeGraph.Serialization;
 using NodeGraph.Unity;
 using NodeGraph.View;
 using SceneBlueprint.Core;
+using SceneBlueprint.Core.Generated;
 using SceneBlueprint.Contract;
 using SceneBlueprint.Editor;
 using SceneBlueprint.Editor.Analysis;
@@ -36,7 +38,6 @@ namespace SceneBlueprint.Editor.Session
     {
         private readonly IWindowCallbacks             _callbacks;
         private readonly SceneBlueprintToolContext    _toolContext;
-        private readonly ISceneBindingStore           _bindingStore;
         private readonly IEditorSpatialModeDescriptor _spatialDescriptor;
         private readonly Action                       _onBlueprintSelectionChanged;
 
@@ -68,6 +69,22 @@ namespace SceneBlueprint.Editor.Session
         {
             CurrentAsset = asset;
             OnAssetChanged?.Invoke(asset);
+        }
+
+        /// <summary>
+        /// 当前蓝图关联的关卡 ID（≥1 有效，0 表示未设置）。
+        /// 读写直接操作 CurrentAsset.LevelId，写入时自动 Undo + SetDirty。
+        /// </summary>
+        public int LevelId
+        {
+            get => CurrentAsset != null ? CurrentAsset.LevelId : 0;
+            set
+            {
+                if (CurrentAsset == null || CurrentAsset.LevelId == value) return;
+                Undo.RecordObject(CurrentAsset, "修改关卡 ID");
+                CurrentAsset.LevelId = value;
+                EditorUtility.SetDirty(CurrentAsset);
+            }
         }
 
         // ── 分析状态 ──
@@ -103,7 +120,6 @@ namespace SceneBlueprint.Editor.Session
             Graph?                           existingGraph,
             IEditorSpatialModeDescriptor     spatialDescriptor,
             SceneBlueprintToolContext        toolContext,
-            ISceneBindingStore               bindingStore,
             IWindowCallbacks                 callbacks,
             Action                           onBlueprintSelectionChanged,
             Action<string, ActionNodeData>   onNodePropertyChanged,
@@ -112,7 +128,7 @@ namespace SceneBlueprint.Editor.Session
             Action<NodeGraph.Core.Port, Vec2> onPortContextMenu)
         {
             _callbacks = callbacks; _toolContext = toolContext;
-            _bindingStore = bindingStore; _spatialDescriptor = spatialDescriptor;
+            _spatialDescriptor = spatialDescriptor;
             _onBlueprintSelectionChanged = onBlueprintSelectionChanged;
 
             // 回滚操作列表：构造期间异常时逆序执行，防止资源泄漏
@@ -184,6 +200,61 @@ namespace SceneBlueprint.Editor.Session
             InspectorDrawer.SetBindingContext(_bindingContext);
             InspectorDrawer.SetGraph(ViewModel.Graph);
             InspectorDrawer.OnPropertyChanged = onNodePropertyChanged;
+
+            // Phase 2: 注入 Tag 维度注册表（从 ITagDimensionDefinitionProvider 自动发现）
+            var tagDimRegistry = new TagDimensionRegistry();
+            foreach (var providerType in UnityEditor.TypeCache.GetTypesDerivedFrom<ITagDimensionDefinitionProvider>())
+            {
+                if (providerType.IsAbstract || providerType.IsInterface) continue;
+                try
+                {
+                    var provider = (ITagDimensionDefinitionProvider)Activator.CreateInstance(providerType);
+                    tagDimRegistry.RegisterFrom(provider);
+                }
+                catch (Exception ex)
+                {
+                    UnityEngine.Debug.LogWarning($"[Session] TagDimensionProvider 实例化失败: {providerType.Name} — {ex.Message}");
+                }
+            }
+            InspectorDrawer.SetTagDimensionRegistry(tagDimRegistry);
+
+            // Phase 2: 收集信号标签（从 USignalTags 类的 const string 字段反射获取）
+            var signalTagList = new System.Collections.Generic.List<string>();
+            foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                try
+                {
+                    foreach (var type in asm.GetTypes())
+                    {
+                        if (type.Name != "USignalTags" || !type.IsClass || !type.IsAbstract) continue;
+                        CollectSignalTagConstants(type, signalTagList);
+                    }
+                }
+                catch { /* 忽略无法反射的程序集 */ }
+            }
+            if (signalTagList.Count > 0)
+            {
+                signalTagList.Sort(StringComparer.Ordinal);
+                InspectorDrawer.SetSignalTags(signalTagList.ToArray());
+            }
+        }
+
+        /// <summary>递归收集类及其嵌套类中的 const string 字段值</summary>
+        private static void CollectSignalTagConstants(Type type, System.Collections.Generic.List<string> result)
+        {
+            foreach (var field in type.GetFields(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static))
+            {
+                if (field.IsLiteral && !field.IsInitOnly && field.FieldType == typeof(string))
+                {
+                    var val = field.GetRawConstantValue() as string;
+                    if (!string.IsNullOrEmpty(val))
+                        result.Add(val!);
+                }
+            }
+            foreach (var nested in type.GetNestedTypes(System.Reflection.BindingFlags.Public))
+            {
+                CollectSignalTagConstants(nested, result);
+            }
         }
 
         private void InitServices(Graph graph, System.Collections.Generic.List<Action> rollback)
@@ -195,9 +266,10 @@ namespace SceneBlueprint.Editor.Session
             rollback.Add(() => { BlueprintPreviewManager.Unregister(_previewKey); _previewManager.ClearAllPreviews(); });
             DirtyScheduler    = Track(new EditorDirtyScheduler(OnDirtyFlush));
             AnalysisCtrl      = Track(new BlueprintAnalysisController(ctx, ctx, () => Profile));
+            AnalysisCtrl.OnReportUpdated += report => LastAnalysisReport = report;
             PreviewScheduler  = Track(new NodePreviewScheduler(ctx, ctx, GetPreviewContextId, _previewManager));
-            BindingRestorer  = new SceneBindingRestorer(ctx, _bindingContext, _bindingStore);
-            BindingCollector = new SceneBindingCollector(ctx, _bindingContext, _bindingStore);
+            BindingRestorer  = new SceneBindingRestorer(ctx, _bindingContext);
+            BindingCollector = new SceneBindingCollector(ctx, _bindingContext);
             BindingValidator = new SceneBindingValidator(ctx);
             BlackboardService  = Track(new BlackboardVariableEditorService(ctx));
             ExportService      = Track(new BlueprintExportService(
@@ -281,14 +353,17 @@ namespace SceneBlueprint.Editor.Session
 
         public void AddDefaultNodes()
         {
-            ViewModel.Commands.Execute(new NodeGraph.Commands.AddNodeCommand("Flow.Start", new Vec2(100, 100)));
-            ViewModel.Commands.Execute(new NodeGraph.Commands.AddNodeCommand("Flow.End",   new Vec2(400, 100)));
+            var addStartCommand = new AddNodeCommand("Flow.Start", new Vec2(100, 100));
+            var addEndCommand = new AddNodeCommand("Flow.End", new Vec2(400, 100));
+
+            ViewModel.Commands.Execute(addStartCommand);
+            ViewModel.Commands.Execute(addEndCommand);
+            ConnectDefaultFlowNodes(addStartCommand.CreatedNodeId, addEndCommand.CreatedNodeId);
             ViewModel.RequestRepaint();
         }
 
         public void RestoreBindingsFromScene() => BindingRestorer.RestoreFromScene();
         public void RunBindingValidation()      => BindingValidator.RunValidation();
-        public void SyncToScene()               => BindingCollector.SyncToScene();
 
         // ── 语义化预览通知 API（Fix-3：收窄对外暴露的 API 面）──
 
@@ -387,6 +462,39 @@ namespace SceneBlueprint.Editor.Session
             if (CurrentAsset != null && !string.IsNullOrEmpty(CurrentAsset.BlueprintId))
                 return CurrentAsset.BlueprintId!;
             return $"unsaved:{GetHashCode()}";
+        }
+
+        private void ConnectDefaultFlowNodes(string? startNodeId, string? endNodeId)
+        {
+            if (string.IsNullOrEmpty(startNodeId) || string.IsNullOrEmpty(endNodeId))
+            {
+                UnityEngine.Debug.LogWarning("[SceneBlueprint] 默认蓝图节点创建失败，无法建立 Start -> End 连线。");
+                return;
+            }
+
+            var startNode = ViewModel.Graph.FindNode(startNodeId);
+            var endNode = ViewModel.Graph.FindNode(endNodeId);
+            var startOutPort = FindPortBySemanticId(startNode, ActionPortIds.FlowStart.Out);
+            var endInPort = FindPortBySemanticId(endNode, ActionPortIds.FlowEnd.In);
+            if (startOutPort == null || endInPort == null)
+            {
+                UnityEngine.Debug.LogWarning("[SceneBlueprint] 默认蓝图节点端口定义不完整，未能建立 Start -> End 连线。");
+                return;
+            }
+
+            var connectCommand = new ConnectCommand(startOutPort.Id, endInPort.Id);
+            ViewModel.Commands.Execute(connectCommand);
+            if (connectCommand.CreatedEdgeId == null)
+                UnityEngine.Debug.LogWarning("[SceneBlueprint] 默认蓝图 Start -> End 连线创建被拒绝。");
+        }
+
+        private static NodeGraph.Core.Port? FindPortBySemanticId(Node? node, string semanticId)
+        {
+            if (node == null || string.IsNullOrEmpty(semanticId))
+                return null;
+
+            return node.Ports.FirstOrDefault(port =>
+                string.Equals(port.SemanticId, semanticId, StringComparison.Ordinal));
         }
 
         internal void UpdateTitle()

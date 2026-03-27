@@ -1,5 +1,6 @@
 #nullable enable
 using System.Linq;
+using SceneBlueprint.Editor.Settings;
 using UnityEditor;
 using UnityEngine;
 
@@ -13,19 +14,29 @@ namespace SceneBlueprint.Editor.SpatialModes
 
         public string SpatialModeId
         {
-            get => string.IsNullOrWhiteSpace(_spatialModeId) ? "Unity3D" : _spatialModeId;
-            set => _spatialModeId = string.IsNullOrWhiteSpace(value) ? "Unity3D" : value.Trim();
+            get => GetSpatialModeId();
+            set => SetSpatialModeId(value);
         }
 
         public static string GetSpatialModeId()
         {
-            return instance.SpatialModeId;
+            string configured = SceneBlueprintSettingsService.Project.FrameworkOverrides.SpatialModeId;
+            if (!string.IsNullOrWhiteSpace(configured))
+            {
+                return configured.Trim();
+            }
+
+            return SceneBlueprintSettingsService.Framework?.Defaults.DefaultSpatialModeId ?? "Unity3D";
         }
 
         public static void SetSpatialModeId(string modeId)
         {
-            instance.SpatialModeId = modeId;
-            instance.Save(true);
+            var project = SceneBlueprintSettingsService.Project;
+            project.FrameworkOverrides.SpatialModeId = string.IsNullOrWhiteSpace(modeId)
+                ? SceneBlueprintSettingsService.Framework?.Defaults.DefaultSpatialModeId ?? "Unity3D"
+                : modeId.Trim();
+            EditorUtility.SetDirty(project);
+            AssetDatabase.SaveAssets();
         }
     }
 
@@ -39,7 +50,7 @@ namespace SceneBlueprint.Editor.SpatialModes
                 label = "SceneBlueprint",
                 guiHandler = _ =>
                 {
-                    var settings = SceneBlueprintProjectSettings.instance;
+                    string currentModeId = SceneBlueprintProjectSettings.GetSpatialModeId();
 
                     var descriptors = SpatialModeRegistry.GetAll()
                         .OrderBy(d => d.DisplayName)
@@ -57,7 +68,7 @@ namespace SceneBlueprint.Editor.SpatialModes
                     var modeIds = descriptors.Select(d => d.ModeId).ToArray();
 
                     int currentIndex = System.Array.FindIndex(modeIds,
-                        id => id.Equals(settings.SpatialModeId, System.StringComparison.OrdinalIgnoreCase));
+                        id => id.Equals(currentModeId, System.StringComparison.OrdinalIgnoreCase));
                     if (currentIndex < 0)
                         currentIndex = 0;
 

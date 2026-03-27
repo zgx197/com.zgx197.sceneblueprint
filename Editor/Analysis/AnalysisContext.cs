@@ -1,6 +1,7 @@
 #nullable enable
 using System.Collections.Generic;
 using NodeGraph.Core;
+using SceneBlueprint.Contract;
 using SceneBlueprint.Core;
 
 namespace SceneBlueprint.Editor.Analysis
@@ -24,11 +25,22 @@ namespace SceneBlueprint.Editor.Analysis
         /// </summary>
         public HashSet<string>? ReachableNodeIds { get; internal set; }
 
-        public AnalysisContext(Graph graph, INodeTypeCatalog typeProvider, ActionRegistry actionRegistry)
+        /// <summary>
+        /// 当前蓝图可见的变量声明列表。
+        /// 由调用方在分析前注入，供类型级 definition validation 与导出阻断规则复用。
+        /// </summary>
+        public IReadOnlyList<VariableDeclaration> Variables { get; }
+
+        public AnalysisContext(
+            Graph graph,
+            INodeTypeCatalog typeProvider,
+            ActionRegistry actionRegistry,
+            IReadOnlyList<VariableDeclaration>? variables = null)
         {
             Graph           = graph;
             TypeProvider    = typeProvider;
             ActionRegistry  = actionRegistry;
+            Variables       = variables ?? System.Array.Empty<VariableDeclaration>();
 
             var boundary = new HashSet<string>();
             foreach (var node in graph.Nodes)

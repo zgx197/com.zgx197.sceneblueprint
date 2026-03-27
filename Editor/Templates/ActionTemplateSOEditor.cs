@@ -99,26 +99,10 @@ namespace SceneBlueprint.Editor.Templates
                 }
             }
 
-            // 属性检查
-            var propKeys = new HashSet<string>();
-            foreach (var prop in _template.Properties)
-            {
-                if (string.IsNullOrWhiteSpace(prop.Key))
-                {
-                    _errors.Add("存在空属性 Key");
-                }
-                else if (!propKeys.Add(prop.Key))
-                {
-                    _errors.Add($"属性 Key '{prop.Key}' 重复");
-                }
+            ValidateOutputVariables(_template.OutputVariables, _errors, _warnings);
 
-                // 枚举选项检查
-                if (prop.Type == ActionTemplateSO.PropertyTypeEntry.Enum
-                    && string.IsNullOrWhiteSpace(prop.EnumOptions))
-                {
-                    _warnings.Add($"属性 '{prop.Key}' 类型为 Enum 但未填写选项");
-                }
-            }
+            var sceneBindingPropertyKeys = new HashSet<string>();
+            ValidateProperties(_template.Properties, "属性", _errors, _warnings, sceneBindingPropertyKeys);
 
             // 场景需求检查
             var bindingKeys = new HashSet<string>();
@@ -132,28 +116,40 @@ namespace SceneBlueprint.Editor.Templates
                 {
                     _errors.Add($"BindingKey '{req.BindingKey}' 重复");
                 }
+                else if (!sceneBindingPropertyKeys.Contains(req.BindingKey))
+                {
+                    _errors.Add($"场景需求 '{req.BindingKey}' 未找到对应的 SceneBinding 属性，无法进入正式 definition 声明");
+                }
+            }
+
+            foreach (var bindingKey in sceneBindingPropertyKeys)
+            {
+                if (!bindingKeys.Contains(bindingKey))
+                {
+                    _warnings.Add($"SceneBinding 属性 '{bindingKey}' 未声明场景需求，将缺少 marker requirement 元数据");
+                }
             }
 
             // 属性数量警告
             if (_template.Properties.Count > 15)
                 _warnings.Add($"属性过多（{_template.Properties.Count} 个），建议拆分");
+
+            var definition = ActionTemplateConverter.Convert(_template);
+            var declarationValidation = ActionDefinitionValidationSupport.EvaluateDeclarationResult(definition);
+            ActionDefinitionValidationGui.AppendMessages(
+                declarationValidation,
+                _errors,
+                _warnings);
         }
 
         private void DrawValidationMessages()
         {
-            foreach (var error in _errors)
-            {
-                EditorGUILayout.HelpBox(error, MessageType.Error);
-            }
-            foreach (var warning in _warnings)
-            {
-                EditorGUILayout.HelpBox(warning, MessageType.Warning);
-            }
-
-            if (_errors.Count == 0 && _warnings.Count == 0)
-            {
-                EditorGUILayout.HelpBox("验证通过 ✅", MessageType.Info);
-            }
+            ActionDefinitionValidationGui.DrawMessages(
+                _errors,
+                _warnings,
+                "验证通过 ✅",
+                blockingSummary: $"错误 {_errors.Count} · 警告 {_warnings.Count} · 模板当前不可注册",
+                warningSummary: $"错误 0 · 警告 {_warnings.Count} · 模板当前可注册");
         }
 
         // ═══════════════════════════════════════════════════════════
@@ -171,6 +167,8 @@ namespace SceneBlueprint.Editor.Templates
             // 基本信息
             using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
             {
+                var definition = ActionTemplateConverter.Convert(_template);
+
                 // 标题行（模拟节点头部）
                 var headerRect = EditorGUILayout.GetControlRect(false, 24);
                 EditorGUI.DrawRect(headerRect, _template.ThemeColor);
@@ -184,35 +182,58 @@ namespace SceneBlueprint.Editor.Templates
                 {
                     if (string.IsNullOrEmpty(port.Id)) continue;
                     var typeLabel = port.PortType == ActionTemplateSO.PortTypeEntry.EventOut ? "Event" : "Flow";
-                    EditorGUILayout.LabelField($"  ← {port.Id} ({port.DisplayName}) [{typeLabel}]");
+                    var graphRoleLabel = port.GraphRole == PortGraphRole.None
+                        ? string.Empty
+                        : $" · {port.GraphRole}";
+                    EditorGUILayout.LabelField($"  ← {port.Id} ({port.DisplayName}) [{typeLabel}{graphRoleLabel}]");
                 }
 
                 // 属性
                 if (_template.Properties.Count > 0)
                 {
                     EditorGUILayout.LabelField("属性", EditorStyles.boldLabel);
-                    foreach (var prop in _template.Properties.OrderBy(p => p.Order))
-                    {
-                        if (string.IsNullOrEmpty(prop.Key)) continue;
-                        var defaultStr = string.IsNullOrEmpty(prop.DefaultValue) ? "" : $" = {prop.DefaultValue}";
-                        EditorGUILayout.LabelField($"  {prop.DisplayName} ({prop.Type}){defaultStr}");
-                    }
+                    DrawDefinitionSectionPreview(definition);
                 }
 
-                // 场景需求
-                if (_template.SceneRequirements.Count > 0)
+                if (ActionDefinitionDeclarationGui.Draw(
+                        definition,
+                        propertyBag: null,
+                        showConfigurationStatus: false))
                 {
-                    EditorGUILayout.LabelField("场景需求", EditorStyles.boldLabel);
-                    foreach (var req in _template.SceneRequirements)
-                    {
-                        if (string.IsNullOrEmpty(req.BindingKey)) continue;
-                        var reqStr = req.Required ? "必需" : "可选";
-                        EditorGUILayout.LabelField($"  {req.DisplayName} [{req.MarkerTypeId}] ({reqStr})");
-                    }
+                    EditorGUILayout.Space(4);
                 }
             }
 
             EditorGUI.indentLevel--;
+        }
+
+        private static void DrawDefinitionSectionPreview(ActionDefinition definition)
+        {
+            var sections = ActionDefinitionSectionLayoutBuilder.BuildVisibleSections(definition);
+            for (var sectionIndex = 0; sectionIndex < sections.Count; sectionIndex++)
+            {
+                var section = sections[sectionIndex];
+                if (sections.Count > 1 || !section.IsImplicitDefault)
+                {
+                    EditorGUILayout.LabelField($"  [{section.Title}]", EditorStyles.miniBoldLabel);
+                }
+
+                DrawPropertyPreviewEntries(section.NormalProperties, isAdvanced: false);
+                DrawPropertyPreviewEntries(section.AdvancedProperties, isAdvanced: true);
+            }
+        }
+
+        private static void DrawPropertyPreviewEntries(
+            IReadOnlyList<PropertyDefinition> properties,
+            bool isAdvanced)
+        {
+            for (var index = 0; index < properties.Count; index++)
+            {
+                var property = properties[index];
+                var defaultStr = property.DefaultValue == null ? string.Empty : $" = {property.DefaultValue}";
+                var advancedLabel = isAdvanced ? " [高级]" : string.Empty;
+                EditorGUILayout.LabelField($"  {property.DisplayName} ({property.Type}){defaultStr}{advancedLabel}");
+            }
         }
 
         // ═══════════════════════════════════════════════════════════
@@ -240,6 +261,158 @@ namespace SceneBlueprint.Editor.Templates
                 if (other.TypeId == typeId) return true;
             }
             return false;
+        }
+
+        private static void ValidateOutputVariables(
+            IList<ActionTemplateSO.OutputVariableEntry> outputVariables,
+            ICollection<string> errors,
+            ICollection<string> warnings)
+        {
+            var variableNames = new HashSet<string>();
+            for (var index = 0; index < outputVariables.Count; index++)
+            {
+                var entry = outputVariables[index];
+                var label = $"输出变量#{index + 1}";
+                if (string.IsNullOrWhiteSpace(entry.Name))
+                {
+                    errors.Add($"{label} 的 Name 不能为空");
+                    continue;
+                }
+
+                if (!variableNames.Add(entry.Name))
+                {
+                    errors.Add($"输出变量 Name '{entry.Name}' 重复");
+                }
+
+                if (string.IsNullOrWhiteSpace(entry.DisplayName))
+                {
+                    warnings.Add($"输出变量 '{entry.Name}' 未填写 DisplayName，预览与下游提示会回退到 Name");
+                }
+            }
+        }
+
+        private static void ValidateProperties(
+            IList<ActionTemplateSO.PropertyEntry> properties,
+            string scopeLabel,
+            ICollection<string> errors,
+            ICollection<string> warnings,
+            ISet<string> sceneBindingPropertyKeys)
+        {
+            var propKeys = new HashSet<string>();
+            var sections = new Dictionary<string, (string title, int order)>(System.StringComparer.Ordinal);
+            for (var index = 0; index < properties.Count; index++)
+            {
+                var prop = properties[index];
+                var propertyLabel = string.IsNullOrWhiteSpace(prop.Key)
+                    ? $"{scopeLabel}#{index + 1}"
+                    : $"{scopeLabel} '{prop.Key}'";
+
+                if (string.IsNullOrWhiteSpace(prop.Key))
+                {
+                    errors.Add($"{scopeLabel}中存在空属性 Key");
+                    continue;
+                }
+
+                if (!propKeys.Add(prop.Key))
+                {
+                    errors.Add($"{scopeLabel}中属性 Key '{prop.Key}' 重复");
+                }
+
+                if (string.IsNullOrWhiteSpace(prop.SectionKey) && !string.IsNullOrWhiteSpace(prop.SectionTitle))
+                {
+                    warnings.Add($"{propertyLabel} 只填写了 SectionTitle，未填写 SectionKey；建议总是通过稳定 SectionKey 驱动分组");
+                }
+
+                if (!string.IsNullOrWhiteSpace(prop.SectionKey))
+                {
+                    var normalizedTitle = string.IsNullOrWhiteSpace(prop.SectionTitle)
+                        ? prop.SectionKey
+                        : prop.SectionTitle;
+                    if (sections.TryGetValue(prop.SectionKey, out var existing))
+                    {
+                        if (!string.Equals(existing.title, normalizedTitle, System.StringComparison.Ordinal))
+                        {
+                            warnings.Add($"{propertyLabel} 的 SectionTitle 与同组属性不一致；同一 SectionKey 应保持单一标题");
+                        }
+
+                        if (existing.order != prop.SectionOrder)
+                        {
+                            warnings.Add($"{propertyLabel} 的 SectionOrder 与同组属性不一致；同一 SectionKey 应保持单一排序");
+                        }
+                    }
+                    else
+                    {
+                        sections.Add(prop.SectionKey, (normalizedTitle, prop.SectionOrder));
+                    }
+                }
+
+                if (prop.Type == ActionTemplateSO.PropertyTypeEntry.Enum)
+                {
+                    var enumOptions = ParseCommaSeparated(prop.EnumOptions);
+                    if (enumOptions.Count == 0)
+                    {
+                        warnings.Add($"属性 '{prop.Key}' 类型为 Enum 但未填写选项");
+                    }
+
+                    var displayOptions = ParseCommaSeparated(prop.EnumDisplayOptions);
+                    if (displayOptions.Count > 0 && displayOptions.Count != enumOptions.Count)
+                    {
+                        warnings.Add($"属性 '{prop.Key}' 的 EnumDisplayOptions 数量与 EnumOptions 不一致，Inspector 将回退到默认文案");
+                    }
+                }
+
+                if (!string.IsNullOrWhiteSpace(prop.TypeSourceKey))
+                {
+                    if (prop.Type != ActionTemplateSO.PropertyTypeEntry.String)
+                    {
+                        warnings.Add($"{propertyLabel} 配置了 TypeSourceKey，但当前类型不是 String");
+                    }
+                    else if (!properties.Any(candidate => candidate.Key == prop.TypeSourceKey))
+                    {
+                        errors.Add($"{propertyLabel} 的 TypeSourceKey '{prop.TypeSourceKey}' 未找到对应属性");
+                    }
+                    else
+                    {
+                        var source = properties.First(candidate => candidate.Key == prop.TypeSourceKey);
+                        if (source.Type != ActionTemplateSO.PropertyTypeEntry.VariableSelector)
+                        {
+                            errors.Add($"{propertyLabel} 的 TypeSourceKey '{prop.TypeSourceKey}' 必须指向 VariableSelector 属性");
+                        }
+                    }
+                }
+
+                if (prop.Type == ActionTemplateSO.PropertyTypeEntry.SceneBinding)
+                {
+                    sceneBindingPropertyKeys.Add(prop.Key);
+                }
+
+                if (prop.Type == ActionTemplateSO.PropertyTypeEntry.StructList)
+                {
+                    if (prop.StructFields == null || prop.StructFields.Count == 0)
+                    {
+                        warnings.Add($"{propertyLabel} 为 StructList，但未声明子字段");
+                    }
+                    else
+                    {
+                        ValidateProperties(
+                            prop.StructFields,
+                            $"{propertyLabel}.StructFields",
+                            errors,
+                            warnings,
+                            sceneBindingPropertyKeys: new HashSet<string>());
+                    }
+                }
+            }
+        }
+
+        private static List<string> ParseCommaSeparated(string raw)
+        {
+            return string.IsNullOrWhiteSpace(raw)
+                ? new List<string>()
+                : raw.Split(',')
+                    .Select(part => part.Trim())
+                    .Where(part => part.Length > 0)
+                    .ToList();
         }
     }
 }
